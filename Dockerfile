@@ -17,13 +17,11 @@ RUN pnpm deploy --filter=@imput/cobalt-api --prod /prod/api
 FROM base AS api
 WORKDIR /app
 
-# 1. Copy the built API code
 COPY --from=build --chown=node:node /prod/api /app
-
-# 2. Copy the .git folder (Cobalt needs this for version metadata)
 COPY --from=build --chown=node:node /app/.git /app/.git
 
-# 3. EXPLICIT FIX: Copy cookies.txt directly from your repo root
+# Copy the cookies file (we keep the name cookies.txt to match your repo, 
+# but the CONTENT must be JSON)
 COPY cookies.txt /app/cookies.txt
 
 USER node
