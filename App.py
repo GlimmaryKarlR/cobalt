@@ -15,13 +15,13 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def automate_downr_capture(youtube_url):
     """
-    Automates Downr.org with a priority-based fallback for different qualities.
+    Automates Downr.org with a priority-based fallback.
+    Uses .first to bypass Strict Mode Violations when multiple links appear.
     """
     timestamp = int(time.time())
     save_path = f"/tmp/{timestamp}_video.mp4"
     
     with sync_playwright() as p:
-        # Launch using the browsers baked into the Playwright Docker image
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             accept_downloads=True,
@@ -32,58 +32,58 @@ def automate_downr_capture(youtube_url):
         print(f"🚀 Navigating to Downr for: {youtube_url}")
         page.goto("https://downr.org", wait_until="networkidle", timeout=60000)
 
-        # 1. Input URL and start conversion
+        # 1. Fill the URL and click Download
         page.wait_for_selector("input[placeholder='Paste URL here']")
         page.fill("input[placeholder='Paste URL here']", youtube_url)
         page.click("button:has-text('Download')")
 
         print("⏳ Waiting for links to generate...")
 
-        # 2. Define Fallback Selectors (Ordered by preference)
-        # We wait for ANY of these to appear using a comma-separated CSS selector
+        # 2. Priority list of link labels
         selectors = [
-            "a:has-text('360p')",           # Format A (Standard)
-            "a:has-text('mp4 (360p) avc1')",# Format B (Alternative Green)
-            "a:has-text('mp4 (240p) avc1')",# Fallback Quality
-            "a:has-text('mp4 (144p) avc1')" # Last Resort
+            "a:has-text('360p')",           # Primary button
+            "a:has-text('mp4 (360p) avc1')",# Alternative green
+            "a:has-text('mp4 (240p) avc1')",# Fallback 1
+            "a:has-text('mp4 (144p) avc1')" # Fallback 2
         ]
         combined_selector = ", ".join(selectors)
 
         try:
-            # Wait up to 90 seconds for any link to show up
+            # Wait up to 90s for any of the above links to appear
             page.wait_for_selector(combined_selector, timeout=90000)
             
-            # Find which specific one is actually visible
-            target_selector = None
+            # 3. Find the best visible link and use .first to avoid strict mode errors
+            target_locator = None
             for s in selectors:
-                if page.locator(s).is_visible():
-                    target_selector = s
+                loc = page.locator(s).first  # <--- CRITICAL FIX: .first added
+                if loc.is_visible():
+                    target_locator = loc
                     print(f"🎯 Target identified: {s}")
                     break
 
-            if not target_selector:
-                raise Exception("Links appeared in DOM but are not visible.")
+            if not target_locator:
+                raise Exception("Links were found in DOM but none were visible.")
 
-            # 3. Trigger Download (Using timeout=0 to wait indefinitely for the server to process)
-            print("💾 Clicking download and waiting for stream to start...")
+            # 4. Handle the download
+            print("💾 Triggering download...")
             with page.expect_download(timeout=0) as download_info:
-                page.click(target_selector)
+                target_locator.click()
             
             download = download_info.value
             download.save_as(save_path)
             
             browser.close()
-            print(f"✅ Download complete: {save_path}")
+            print(f"✅ Local capture successful: {save_path}")
             return save_path
 
         except Exception as e:
             browser.close()
-            print(f"❌ Automation Step Failed: {str(e)}")
+            print(f"❌ Automation failed: {str(e)}")
             raise e
 
 @app.route('/', methods=['GET'])
 def health():
-    return "Downloader Engine: Online", 200
+    return "Automation Engine Status: Online", 200
 
 @app.route('/api/process-link', methods=['POST'])
 def process_link():
@@ -91,15 +91,15 @@ def process_link():
     video_url = data.get('url')
 
     if not video_url:
-        return jsonify({"error": "Missing URL"}), 400
+        return jsonify({"error": "No URL provided"}), 400
 
     local_file = None
     try:
-        # Step 1: Run Playwright Automation
+        # Step 1: Automate capture
         local_file = automate_downr_capture(video_url)
         
         if not os.path.exists(local_file):
-            return jsonify({"error": "File capture failed"}), 500
+            return jsonify({"error": "File was not saved locally"}), 500
 
         # Step 2: Upload to Supabase Storage
         file_name = os.path.basename(local_file)
@@ -112,8 +112,8 @@ def process_link():
                 {"content-type": "video/mp4"}
             )
 
-        # Step 3: Insert Database Record
-        job_payload = {
+        # Step 3: Insert Database Entry
+        job_entry = {
             "video_url": f"videos/{file_name}",
             "tier_key": 1,
             "mode": "do",
@@ -121,16 +121,16 @@ def process_link():
             "priority": "low",
             "source": "website"
         }
-        db_res = supabase.table("jobs").insert(job_payload).execute()
+        db_res = supabase.table("jobs").insert(job_entry).execute()
 
-        # Step 4: Cleanup Local Temp File
+        # Step 4: Final Cleanup
         if os.path.exists(local_file):
             os.remove(local_file)
 
         return jsonify({
-            "status": "success",
-            "job_id": db_res.data[0]['id'],
-            "file": file_name
+            "status": "success", 
+            "job_id": db_res.data[0]['id'] if db_res.data else "n/a",
+            "file_name": file_name
         })
 
     except Exception as e:
@@ -140,5 +140,5 @@ def process_link():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    # Standard Koyeb Port
+    # Ensure port 8080 for Koyeb
     app.run(host="0.0.0.0", port=8080)
