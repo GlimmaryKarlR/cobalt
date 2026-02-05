@@ -14,28 +14,37 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def generate_netscape_cookies():
-    print("🍪 Generating fresh cookies...")
+    print("🍪 Performing deep cookie scrape...")
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
+            # Use a real user agent to look less like a bot
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+            )
             page = context.new_page()
-            page.goto("https://www.youtube.com", wait_until="networkidle")
-            raw_cookies = context.cookies()
             
+            # Go to a specific video instead of home to trigger real session cookies
+            page.goto("https://www.youtube.com/watch?v=PdYtVUk-EFo", wait_until="networkidle")
+            
+            # Give it 5 seconds to settle and run JS
+            time.sleep(5) 
+            
+            raw_cookies = context.cookies()
             lines = ["# Netscape HTTP Cookie File", ""]
             for c in raw_cookies:
                 domain = c['domain']
                 flag = "TRUE" if domain.startswith('.') else "FALSE"
                 path = c['path']
                 secure = "TRUE" if c['secure'] else "FALSE"
-                expiry = str(int(c.get('expires', 0)))
+                # Handle the -1 or missing expiry by setting a far-future date
+                expiry = str(int(c.get('expires', time.time() + 86400))) 
                 lines.append(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{c['name']}\t{c['value']}")
                 
             with open("cookies.txt", "w") as f:
                 f.write("\n".join(lines))
             browser.close()
-            print("✅ Cookies saved to cookies.txt")
+            print("✅ Deep cookies saved.")
     except Exception as e:
         print(f"❌ Cookie generation failed: {e}")
 
