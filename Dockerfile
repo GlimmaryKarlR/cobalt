@@ -9,11 +9,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# 2. Copy your entire repository into the container
+# 2. Copy the contents of the current repo (cobalt)
 COPY . .
 
-# 3. Install Python dependencies directly
-# We add flask-cors for frontend communication and supabase for the jobs table
+# 3. Install the specific libraries your App.py needs
 RUN pip install --no-cache-dir \
     playwright \
     flask \
@@ -21,11 +20,11 @@ RUN pip install --no-cache-dir \
     supabase \
     yt-dlp
 
-# 4. Initialize Playwright browsers
+# 4. Initialize Playwright
 RUN playwright install chromium
 RUN playwright install-deps chromium
 
-# 5. Run the app
-# Based on your directory: model_hub_interface/src/App.py
-# We use -u for unbuffered logs so you can see them in Koyeb
+# 5. THE CRITICAL PART: 
+# If App.py is in this repo, use its path. 
+# If you are deploying the 'physVLA' repo in Koyeb instead, use:
 CMD ["python", "-u", "model_hub_interface/src/App.py"]
