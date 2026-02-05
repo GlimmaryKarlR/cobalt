@@ -10,21 +10,18 @@ CORS(app)
 
 # --- Configuration ---
 SUPABASE_URL = "https://wherenftvmhfzhbegftb.supabase.co"
-# Make sure this is set in your Koyeb Environment Variables!
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def automate_downr_capture(youtube_url):
     """
-    Automates Downr.org to fetch the video. 
-    The browser is provided by the mcr.microsoft.com/playwright image.
+    Automates Downr.org with a priority-based fallback for different qualities.
     """
     timestamp = int(time.time())
     save_path = f"/tmp/{timestamp}_video.mp4"
     
     with sync_playwright() as p:
-        # We do NOT specify executable_path. 
-        # Playwright will find its twin browser in /ms-playwright/ automatically.
+        # Launch using the browsers baked into the Playwright Docker image
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             accept_downloads=True,
@@ -32,33 +29,61 @@ def automate_downr_capture(youtube_url):
         )
         page = context.new_page()
 
-        print(f"🚀 Automating Downr for: {youtube_url}")
+        print(f"🚀 Navigating to Downr for: {youtube_url}")
         page.goto("https://downr.org", wait_until="networkidle", timeout=60000)
 
-        # 1. Fill the URL
+        # 1. Input URL and start conversion
         page.wait_for_selector("input[placeholder='Paste URL here']")
         page.fill("input[placeholder='Paste URL here']", youtube_url)
-
-        # 2. Click Download
         page.click("button:has-text('Download')")
-        print("⏳ Processing... waiting for 360p link.")
 
-        # 3. Wait for the link (Downr can take a moment to fetch from YouTube)
-        page.wait_for_selector("a:has-text('360p')", timeout=90000)
+        print("⏳ Waiting for links to generate...")
 
-        # 4. Intercept and save the download
-        with page.expect_download() as download_info:
-            page.click("a:has-text('360p')")
-        
-        download = download_info.value
-        download.save_as(save_path)
-        
-        browser.close()
-        return save_path
+        # 2. Define Fallback Selectors (Ordered by preference)
+        # We wait for ANY of these to appear using a comma-separated CSS selector
+        selectors = [
+            "a:has-text('360p')",           # Format A (Standard)
+            "a:has-text('mp4 (360p) avc1')",# Format B (Alternative Green)
+            "a:has-text('mp4 (240p) avc1')",# Fallback Quality
+            "a:has-text('mp4 (144p) avc1')" # Last Resort
+        ]
+        combined_selector = ", ".join(selectors)
+
+        try:
+            # Wait up to 90 seconds for any link to show up
+            page.wait_for_selector(combined_selector, timeout=90000)
+            
+            # Find which specific one is actually visible
+            target_selector = None
+            for s in selectors:
+                if page.locator(s).is_visible():
+                    target_selector = s
+                    print(f"🎯 Target identified: {s}")
+                    break
+
+            if not target_selector:
+                raise Exception("Links appeared in DOM but are not visible.")
+
+            # 3. Trigger Download (Using timeout=0 to wait indefinitely for the server to process)
+            print("💾 Clicking download and waiting for stream to start...")
+            with page.expect_download(timeout=0) as download_info:
+                page.click(target_selector)
+            
+            download = download_info.value
+            download.save_as(save_path)
+            
+            browser.close()
+            print(f"✅ Download complete: {save_path}")
+            return save_path
+
+        except Exception as e:
+            browser.close()
+            print(f"❌ Automation Step Failed: {str(e)}")
+            raise e
 
 @app.route('/', methods=['GET'])
 def health():
-    return "Automation Engine: Online", 200
+    return "Downloader Engine: Online", 200
 
 @app.route('/api/process-link', methods=['POST'])
 def process_link():
@@ -66,42 +91,54 @@ def process_link():
     video_url = data.get('url')
 
     if not video_url:
-        return jsonify({"error": "No URL"}), 400
+        return jsonify({"error": "Missing URL"}), 400
 
     local_file = None
     try:
-        # Step 1: Capture
+        # Step 1: Run Playwright Automation
         local_file = automate_downr_capture(video_url)
         
-        # Step 2: Upload to Supabase
+        if not os.path.exists(local_file):
+            return jsonify({"error": "File capture failed"}), 500
+
+        # Step 2: Upload to Supabase Storage
         file_name = os.path.basename(local_file)
         print(f"📤 Uploading {file_name} to Supabase...")
+        
         with open(local_file, "rb") as f:
             supabase.storage.from_("videos").upload(
-                file_name, f, {"content-type": "video/mp4"}
+                file_name, 
+                f, 
+                {"content-type": "video/mp4"}
             )
 
-        # Step 3: Log Job
-        job_data = {
+        # Step 3: Insert Database Record
+        job_payload = {
             "video_url": f"videos/{file_name}",
-            "status": "pending",
             "tier_key": 1,
-            "mode": "do"
+            "mode": "do",
+            "status": "pending",
+            "priority": "low",
+            "source": "website"
         }
-        supabase.table("jobs").insert(job_data).execute()
+        db_res = supabase.table("jobs").insert(job_payload).execute()
 
-        # Step 4: Cleanup
+        # Step 4: Cleanup Local Temp File
         if os.path.exists(local_file):
             os.remove(local_file)
 
-        return jsonify({"status": "success", "file": file_name})
+        return jsonify({
+            "status": "success",
+            "job_id": db_res.data[0]['id'],
+            "file": file_name
+        })
 
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
+        print(f"❌ Route Error: {str(e)}")
         if local_file and os.path.exists(local_file):
             os.remove(local_file)
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    # Koyeb requires host 0.0.0.0
+    # Standard Koyeb Port
     app.run(host="0.0.0.0", port=8080)
