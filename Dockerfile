@@ -24,7 +24,9 @@ RUN pip install --no-cache-dir \
 RUN playwright install chromium
 RUN playwright install-deps chromium
 
+WORKDIR /app/model_hub_interface/src
+
 # 5. THE CRITICAL PART: 
 # If App.py is in this repo, use its path. 
 # If you are deploying the 'physVLA' repo in Koyeb instead, use:
-CMD ["python", "-u", "model_hub_interface/src/App.py"]
+CMD ["python", "-u", "App.py"]
