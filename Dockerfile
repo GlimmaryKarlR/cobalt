@@ -7,12 +7,13 @@ RUN apt-get update && apt-get install -y \
     libxrandr2 libgbm1 libasound2 ffmpeg curl \
     && rm -rf /var/lib/apt/lists/*
 
+# 2. Set the working directory
 WORKDIR /app
 
-# 2. Copy the contents of the current repo (cobalt)
+# 3. Copy the current folder (cobalt) into /app
 COPY . .
 
-# 3. Install the specific libraries your App.py needs
+# 4. Install specific libraries
 RUN pip install --no-cache-dir \
     playwright \
     flask \
@@ -20,12 +21,10 @@ RUN pip install --no-cache-dir \
     supabase \
     yt-dlp
 
-# 4. Initialize Playwright
+# 5. Initialize Playwright
 RUN playwright install chromium
 RUN playwright install-deps chromium
 
-WORKDIR /app
-
-# 6. Run using the relative path from the root
-# This ensures it finds the file and maintains the module structure
-CMD ["python", "-u", "model_hub_interface/src/App.py"]
+# 6. Run the app directly from the current folder
+# Since App.py is now in the root of the repo, this will find it immediately.
+CMD ["python", "-u", "App.py"]
