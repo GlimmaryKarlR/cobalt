@@ -1,31 +1,19 @@
-FROM node:24-alpine AS base
-ENV PNPM_HOME="/pnpm"
-ENV PATH="$PNPM_HOME:$PATH"
+FROM python:3.11-slim
 
-FROM base AS build
+# Install system deps for Playwright
+RUN apt-get update && apt-get install -y \
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+    libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+    libxrandr2 libgbm1 libasound2 ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
-COPY . /app
+COPY . .
 
-RUN corepack enable
-# We add ffmpeg here just in case the build needs to probe anything
-RUN apk add --no-cache python3 alpine-sdk ffmpeg
+# Install Playwright and Chromium
+RUN pip install playwright
+RUN playwright install chromium
+RUN playwright install-deps chromium
 
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm install --prod --frozen-lockfile
-
-RUN pnpm deploy --filter=@imput/cobalt-api --prod /prod/api
-
-FROM base AS api
-WORKDIR /app
-
-# Install ffmpeg in the final image - crucial for fixing 'moov atom' issues
-RUN apk add --no-cache ffmpeg
-
-COPY --from=build --chown=node:node /prod/api /app
-COPY --from=build --chown=node:node /app/.git /app/.git
-COPY --chown=node:node cookies.txt /app/cookies.txt
-
-USER node
-
-EXPOSE 9000
-CMD [ "node", "src/cobalt" ]
+# This command runs the exporter, then starts your downloader
+CMD python exporter.py && python your_main_downloader.py
