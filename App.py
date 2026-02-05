@@ -9,118 +9,98 @@ from playwright.sync_api import sync_playwright
 app = Flask(__name__)
 CORS(app)
 
-# --- CONFIGURATION ---
 SUPABASE_URL = "https://wherenftvmhfzhbegftb.supabase.co"
-# In Koyeb, set SUPABASE_SERVICE_ROLE_KEY (found in Supabase Settings > API)
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def generate_netscape_cookies():
-    """
-    Replicates 'Downr' extension logic to create a valid Netscape cookies.txt.
-    """
+    print("🍪 Generating fresh cookies...")
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context()
             page = context.new_page()
-            page.goto("https://www.youtube.com")
+            page.goto("https://www.youtube.com", wait_until="networkidle")
             raw_cookies = context.cookies()
             
-            lines = [
-                "# Netscape HTTP Cookie File",
-                "# http://curl.haxx.se/rfc/cookie_spec.html",
-                "# This is a generated file! Do not edit.",
-                ""
-            ]
-            
+            lines = ["# Netscape HTTP Cookie File", ""]
             for c in raw_cookies:
                 domain = c['domain']
                 flag = "TRUE" if domain.startswith('.') else "FALSE"
                 path = c['path']
                 secure = "TRUE" if c['secure'] else "FALSE"
                 expiry = str(int(c.get('expires', 0)))
-                line = f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{c['name']}\t{c['value']}"
-                lines.append(line)
+                lines.append(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{c['name']}\t{c['value']}")
                 
             with open("cookies.txt", "w") as f:
                 f.write("\n".join(lines))
             browser.close()
+            print("✅ Cookies saved to cookies.txt")
     except Exception as e:
-        print(f"Cookie generation failed: {e}")
+        print(f"❌ Cookie generation failed: {e}")
 
 @app.route('/api/process-link', methods=['POST'])
 def process_link():
     data = request.json
     video_url = data.get('url')
-    
     if not video_url:
         return jsonify({"error": "No URL provided"}), 400
 
-    # Match your existing naming convention: timestamp_id.mp4
     timestamp = int(time.time() * 1000)
-    video_id = video_url.split('=')[-1] if '=' in video_url else "ext"
-    filename = f"{timestamp}_{video_id}.mp4"
+    filename = f"{timestamp}_video.mp4"
     temp_raw = f"raw_{filename}"
 
     try:
-        # 1. Prepare Cookies
         generate_netscape_cookies()
         
-        # 2. Download and Fix (FastStart + 3:01 limit)
+        # We capture stderr to see the ACTUAL error in Koyeb logs
         download_cmd = [
             "yt-dlp",
             "--cookies", "cookies.txt",
             "--match-filter", "duration <= 181",
-            "-f", "bestvideo+bestaudio/best",
+            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
             "--merge-output-format", "mp4",
             "-o", temp_raw,
-            "--exec", f"ffmpeg -i {temp_raw} -c copy -movflags +faststart {filename} && rm {temp_raw}",
             video_url
         ]
         
+        print(f"🎬 Starting download: {video_url}")
         process = subprocess.run(download_cmd, capture_output=True, text=True)
         
-        if "does not pass filter duration <= 181" in process.stdout:
-            return jsonify({"status": "error", "message": "Video exceeds 3:01 limit."}), 400
+        if process.returncode != 0:
+            print(f"❌ YT-DLP Error Log:\n{process.stderr}") # CHECK KOYEB LOGS FOR THIS
+            return jsonify({"status": "error", "message": f"yt-dlp failed: {process.stderr[:100]}"}), 500
+
+        # Run FFmpeg to fix headers
+        print("🛠 Fixing video headers with FFmpeg...")
+        ffmpeg_cmd = ["ffmpeg", "-i", temp_raw, "-c", "copy", "-movflags", "+faststart", filename]
+        subprocess.run(ffmpeg_cmd, capture_output=True)
 
         if not os.path.exists(filename):
-            return jsonify({"status": "error", "message": "Processing failed."}), 500
+            return jsonify({"status": "error", "message": "FFmpeg output missing"}), 500
 
-        # 3. Upload to Supabase 'videos' bucket
-        storage_path = filename # root of the bucket
+        print(f"📤 Uploading {filename} to Supabase...")
         with open(filename, "rb") as f:
-            supabase.storage.from_("videos").upload(
-                file=f,
-                path=storage_path,
-                file_options={"content-type": "video/mp4", "upsert": "true"}
-            )
+            supabase.storage.from_("videos").upload(filename, f, {"content-type": "video/mp4"})
 
-        # 4. Insert into the 'jobs' table using your headers
         job_entry = {
-            "video_url": f"videos/{storage_path}", # Matching your table format
+            "video_url": f"videos/{filename}",
             "tier_key": 1,
             "mode": "do",
             "status": "pending",
             "priority": "low",
-            "source": "website",
-            "progress_percent": 0,
-            "current_step": "Queued from external link",
-            "user_id": data.get('user_id') # Received from App.tsx
+            "source": "website"
         }
-        
-        db_response = supabase.table("jobs").insert(job_entry).execute()
+        db_res = supabase.table("jobs").insert(job_entry).execute()
 
-        # 5. Local Cleanup
-        if os.path.exists(filename):
-            os.remove(filename)
+        # Cleanup
+        os.remove(filename)
+        if os.path.exists(temp_raw): os.remove(temp_raw)
 
-        return jsonify({
-            "status": "success",
-            "job_id": db_response.data[0]['id']
-        })
+        return jsonify({"status": "success", "job_id": db_res.data[0]['id']})
 
     except Exception as e:
+        print(f"💥 Critical Crash: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == "__main__":
