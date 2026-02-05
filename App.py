@@ -16,77 +16,61 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def automate_downr_capture(youtube_url):
-    """
-    Automates Downr.org to generate a link, extracts the href, 
-    and downloads the file directly via requests to avoid playback stalls.
-    """
     timestamp = int(time.time())
     save_path = f"/tmp/{timestamp}_video.mp4"
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # We still use a real User-Agent to keep the request looking organic
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        )
+        # 1. Define a consistent User-Agent
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        context = browser.new_context(user_agent=ua)
         page = context.new_page()
 
         print(f"🚀 Navigating to Downr for: {youtube_url}")
         page.goto("https://downr.org", wait_until="networkidle", timeout=60000)
 
-        # 1. Fill the URL and trigger conversion
         page.wait_for_selector("input[placeholder='Paste URL here']")
         page.fill("input[placeholder='Paste URL here']", youtube_url)
         page.click("button:has-text('Download')")
 
-        print("⏳ Waiting for links to generate...")
+        print("⏳ Waiting for links...")
+        selectors = ["a:has-text('360p')", "a:has-text('mp4 (360p) avc1')", "a:has-text('mp4 (240p) avc1')"]
+        page.wait_for_selector(", ".join(selectors), timeout=90000)
+        
+        video_link = None
+        for s in selectors:
+            loc = page.locator(s).first
+            if loc.is_visible():
+                video_link = loc.get_attribute("href")
+                break
 
-        # 2. Priority selectors for different video qualities
-        selectors = [
-            "a:has-text('360p')",           
-            "a:has-text('mp4 (360p) avc1')",
-            "a:has-text('mp4 (240p) avc1')",
-            "a:has-text('mp4 (144p) avc1')" 
-        ]
-        combined_selector = ", ".join(selectors)
+        if not video_link:
+            browser.close()
+            raise Exception("Direct link extraction failed.")
 
+        # 2. STEAL THE COOKIES from the browser session
+        playwright_cookies = context.cookies()
+        # Convert to format Requests library understands
+        session_cookies = {c['name']: c['value'] for c in playwright_cookies}
+
+        # 3. DOWNLOAD with full browser identity
+        print("💾 Downloading via authenticated stream...")
         try:
-            # Wait for Downr's backend to provide the links
-            page.wait_for_selector(combined_selector, timeout=90000)
-            
-            # 3. Find the best available link and grab the URL (href)
-            video_link = None
-            for s in selectors:
-                loc = page.locator(s).first
-                if loc.is_visible():
-                    video_link = loc.get_attribute("href")
-                    print(f"🎯 Target link extracted: {video_link[:50]}...")
-                    break
-
-            if not video_link:
-                raise Exception("Links found in DOM but href attribute is missing.")
-
-            # 4. DOWNLOAD DIRECTLY (The Bypass)
-            # We use stream=True for large files and a long timeout for slow servers
-            print("💾 Downloading file via direct stream (bypassing browser playback)...")
-            
-            # We copy the cookies/headers from the browser session if needed, 
-            # though usually Downr links are IP-bound and don't require them.
-            with requests.get(video_link, stream=True, timeout=300) as r:
-                r.raise_for_status()
-                with open(save_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=16384):
-                        if chunk:
+            with requests.Session() as s:
+                # Give Requests the same "face" as the browser
+                s.headers.update({"User-Agent": ua})
+                s.cookies.update(session_cookies)
+                
+                with s.get(video_link, stream=True, timeout=300) as r:
+                    r.raise_for_status()
+                    with open(save_path, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=32768):
                             f.write(chunk)
             
             browser.close()
-            print(f"✅ Download complete: {save_path}")
             return save_path
-
         except Exception as e:
-            if 'browser' in locals():
-                browser.close()
-            print(f"❌ Automation Error: {str(e)}")
+            browser.close()
             raise e
 
 @app.route('/', methods=['GET'])
