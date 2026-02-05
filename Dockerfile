@@ -1,36 +1,20 @@
-FROM python:3.11-slim
+# 1. Use the official Playwright Python image. 
+# This already includes Chromium, Firefox, WebKit and all system deps.
+FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
 
-# 1. Install system dependencies + Node.js
-# We combine these to keep the image size smaller.
-RUN apt-get update && apt-get install -y \
-    curl \
-    gnupg \
-    ffmpeg \
-    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
+# 2. Set the working directory
 WORKDIR /app
 
-# 2. Copy your application files
+# 3. Copy your application code
 COPY . .
 
-# 3. Install Python packages
-# We add 'playwright' here so we can use the CLI in the next step
-RUN pip install --no-cache-dir playwright flask flask-cors supabase yt-dlp
+# 4. Install your Python dependencies
+# Note: 'playwright' is already in the base image, but we ensure it matches our version
+RUN pip install --no-cache-dir flask flask-cors supabase yt-dlp
 
-# 4. Install Chromium and its OS-level dependencies
-# 'install-deps' is a magic command that handles all the Linux libraries
-# Chromium needs (libnss, libatk, etc.) so you don't have to list them manually.
-RUN playwright install chromium
-RUN playwright install-deps chromium
-
-# 5. Set Environment Variables
-# Ensures Python output is sent straight to Koyeb logs
+# 5. Environment Variables
 ENV PYTHONUNBUFFERED=1
-# Tells Playwright where to find the browsers
-ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/bin
 
-# 6. Run the app
-# Using -u makes the logs stream in real-time
+# 6. Start the app
+# No need to run 'playwright install' - it's already baked into this image!
 CMD ["python", "-u", "App.py"]
