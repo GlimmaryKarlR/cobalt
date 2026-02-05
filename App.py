@@ -17,46 +17,43 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 def generate_netscape_cookies():
-    """
-    Attempts to scrape session cookies from YouTube using Playwright.
-    Uses domcontentloaded to avoid the 30s networkidle timeout on slow cloud IPs.
-    """
-    print("🍪 Performing fast cookie scrape...")
+    print("🍪 Performing deep 'Human-Sim' cookie scrape...")
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(user_agent=USER_AGENT)
             page = context.new_page()
             
-            # Go to YouTube with a shorter timeout and faster 'wait_until'
-            try:
-                page.goto("https://www.youtube.com", wait_until="domcontentloaded", timeout=15000)
-                time.sleep(3) # Wait slightly for JS to set cookies
-            except Exception as e:
-                print(f"⚠️ Page load slow/timed out, but checking for partial cookies...")
-
+            # Go directly to the video to trigger "Watch" cookies (PO_TOKEN)
+            # Using a popular video helps establish a "normal" session
+            page.goto("https://www.youtube.com/watch?v=PdYtVUk-EFo", wait_until="domcontentloaded")
+            
+            # Simulate a human: Wait, then click 'Play' if a button exists, or just wait
+            print("⏳ Simulating watch time...")
+            time.sleep(8) 
+            
             raw_cookies = context.cookies()
             if not raw_cookies:
-                print("⚠️ No cookies were captured.")
-                browser.close()
                 return False
 
-            # Format cookies into Netscape standard for yt-dlp
             lines = ["# Netscape HTTP Cookie File", ""]
             for c in raw_cookies:
+                # Filter out the invalid -1 expires that yt-dlp hates
+                expiry = c.get('expires', -1)
+                if expiry == -1:
+                    expiry = int(time.time() + 3600) # 1 hour from now
+                
                 domain = c['domain']
                 flag = "TRUE" if domain.startswith('.') else "FALSE"
                 path = c['path']
                 secure = "TRUE" if c['secure'] else "FALSE"
-                # Set expiry to 1 hour from now if missing or invalid
-                expiry = str(int(c.get('expires', time.time() + 3600)))
-                lines.append(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{c['name']}\t{c['value']}")
+                lines.append(f"{domain}\t{flag}\t{path}\t{secure}\t{int(expiry)}\t{c['name']}\t{c['value']}")
                 
             with open("cookies.txt", "w") as f:
                 f.write("\n".join(lines))
             
             browser.close()
-            print("✅ Cookies saved to cookies.txt")
+            print("✅ Watch-session cookies saved.")
             return True
     except Exception as e:
         print(f"❌ Cookie generation failed: {e}")
