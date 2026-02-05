@@ -9,44 +9,58 @@ from playwright.sync_api import sync_playwright
 app = Flask(__name__)
 CORS(app)
 
+# --- Configuration ---
 SUPABASE_URL = "https://wherenftvmhfzhbegftb.supabase.co"
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
 def generate_netscape_cookies():
-    print("🍪 Performing deep cookie scrape...")
+    """
+    Attempts to scrape session cookies from YouTube using Playwright.
+    Uses domcontentloaded to avoid the 30s networkidle timeout on slow cloud IPs.
+    """
+    print("🍪 Performing fast cookie scrape...")
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            # Use a real user agent to look less like a bot
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-            )
+            context = browser.new_context(user_agent=USER_AGENT)
             page = context.new_page()
             
-            # Go to a specific video instead of home to trigger real session cookies
-            page.goto("https://www.youtube.com/watch?v=PdYtVUk-EFo", wait_until="networkidle")
-            
-            # Give it 5 seconds to settle and run JS
-            time.sleep(5) 
-            
+            # Go to YouTube with a shorter timeout and faster 'wait_until'
+            try:
+                page.goto("https://www.youtube.com", wait_until="domcontentloaded", timeout=15000)
+                time.sleep(3) # Wait slightly for JS to set cookies
+            except Exception as e:
+                print(f"⚠️ Page load slow/timed out, but checking for partial cookies...")
+
             raw_cookies = context.cookies()
+            if not raw_cookies:
+                print("⚠️ No cookies were captured.")
+                browser.close()
+                return False
+
+            # Format cookies into Netscape standard for yt-dlp
             lines = ["# Netscape HTTP Cookie File", ""]
             for c in raw_cookies:
                 domain = c['domain']
                 flag = "TRUE" if domain.startswith('.') else "FALSE"
                 path = c['path']
                 secure = "TRUE" if c['secure'] else "FALSE"
-                # Handle the -1 or missing expiry by setting a far-future date
-                expiry = str(int(c.get('expires', time.time() + 86400))) 
+                # Set expiry to 1 hour from now if missing or invalid
+                expiry = str(int(c.get('expires', time.time() + 3600)))
                 lines.append(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{c['name']}\t{c['value']}")
                 
             with open("cookies.txt", "w") as f:
                 f.write("\n".join(lines))
+            
             browser.close()
-            print("✅ Deep cookies saved.")
+            print("✅ Cookies saved to cookies.txt")
+            return True
     except Exception as e:
         print(f"❌ Cookie generation failed: {e}")
+        return False
 
 @app.route('/api/process-link', methods=['POST'])
 def process_link():
@@ -60,38 +74,50 @@ def process_link():
     temp_raw = f"raw_{filename}"
 
     try:
-        generate_netscape_cookies()
+        # 1. Try to get cookies
+        has_cookies = generate_netscape_cookies()
         
-        # We capture stderr to see the ACTUAL error in Koyeb logs
+        # 2. Build yt-dlp command
         download_cmd = [
             "yt-dlp",
-            "--cookies", "cookies.txt",
+            "--no-check-certificates",
+            "--user-agent", USER_AGENT,
             "--match-filter", "duration <= 181",
             "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
             "--merge-output-format", "mp4",
             "-o", temp_raw,
             video_url
         ]
+
+        # Use cookies only if they were successfully generated
+        if has_cookies and os.path.exists("cookies.txt"):
+            download_cmd.insert(1, "--cookies")
+            download_cmd.insert(2, "cookies.txt")
         
         print(f"🎬 Starting download: {video_url}")
         process = subprocess.run(download_cmd, capture_output=True, text=True)
         
         if process.returncode != 0:
-            print(f"❌ YT-DLP Error Log:\n{process.stderr}") # CHECK KOYEB LOGS FOR THIS
-            return jsonify({"status": "error", "message": f"yt-dlp failed: {process.stderr[:100]}"}), 500
+            print(f"❌ YT-DLP Error Log:\n{process.stderr}")
+            return jsonify({
+                "status": "error", 
+                "message": f"yt-dlp failed. Bot detection likely. Check Koyeb logs."
+            }), 500
 
-        # Run FFmpeg to fix headers
-        print("🛠 Fixing video headers with FFmpeg...")
-        ffmpeg_cmd = ["ffmpeg", "-i", temp_raw, "-c", "copy", "-movflags", "+faststart", filename]
-        subprocess.run(ffmpeg_cmd, capture_output=True)
+        # 3. Fix headers with FFmpeg
+        if os.path.exists(temp_raw):
+            print("🛠 Fixing video headers with FFmpeg...")
+            ffmpeg_cmd = ["ffmpeg", "-i", temp_raw, "-c", "copy", "-movflags", "+faststart", filename]
+            subprocess.run(ffmpeg_cmd, capture_output=True)
+        else:
+            return jsonify({"status": "error", "message": "Download completed but file not found."}), 500
 
-        if not os.path.exists(filename):
-            return jsonify({"status": "error", "message": "FFmpeg output missing"}), 500
-
+        # 4. Upload to Supabase Storage
         print(f"📤 Uploading {filename} to Supabase...")
         with open(filename, "rb") as f:
             supabase.storage.from_("videos").upload(filename, f, {"content-type": "video/mp4"})
 
+        # 5. Insert Job into Database
         job_entry = {
             "video_url": f"videos/{filename}",
             "tier_key": 1,
@@ -102,9 +128,10 @@ def process_link():
         }
         db_res = supabase.table("jobs").insert(job_entry).execute()
 
-        # Cleanup
-        os.remove(filename)
+        # 6. Cleanup local files
+        if os.path.exists(filename): os.remove(filename)
         if os.path.exists(temp_raw): os.remove(temp_raw)
+        if os.path.exists("cookies.txt"): os.remove("cookies.txt")
 
         return jsonify({"status": "success", "job_id": db_res.data[0]['id']})
 
@@ -112,5 +139,10 @@ def process_link():
         print(f"💥 Critical Crash: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/', methods=['GET'])
+def health_check():
+    return "Server is running. Endpoint: /api/process-link", 200
+
 if __name__ == "__main__":
+    # Koyeb expects 0.0.0.0 to route traffic correctly
     app.run(host="0.0.0.0", port=8080)
