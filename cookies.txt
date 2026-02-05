@@ -1,3 +1,5 @@
 {
-  "youtube": "VISITOR_INFO1_LIVE=your_value; HSID=your_value; SID=your_value; APISID=your_value; SAPISID=your_value; __Secure-1PSID=your_value; __Secure-3PSID=your_value; LOGIN_INFO=your_value; PREF=your_value; SIDCC=your_value;"
+  "youtube": [
+    "VISITOR_INFO1_LIVE=your_value; HSID=your_value; SID=your_value; APISID=your_value; SAPISID=your_value; __Secure-1PSID=your_value; __Secure-3PSID=your_value; LOGIN_INFO=your_value; PREF=your_value; SIDCC=your_value;"
+  ]
 }
