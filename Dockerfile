@@ -1,20 +1,19 @@
-# 1. Use the official Playwright Python image. 
-# This already includes Chromium, Firefox, WebKit and all system deps.
+# 1. Official Playwright image (includes Chromium + System Deps)
 FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
 
-# 2. Set the working directory
 WORKDIR /app
 
-# 3. Copy your application code
+# 2. Install the Playwright Python library (this fixes the ModuleNotFoundError)
+# We also include your other requirements.
+RUN pip install --no-cache-dir playwright flask flask-cors supabase yt-dlp
+
+# 3. Copy your app files
 COPY . .
 
-# 4. Install your Python dependencies
-# Note: 'playwright' is already in the base image, but we ensure it matches our version
-RUN pip install --no-cache-dir flask flask-cors supabase yt-dlp
-
-# 5. Environment Variables
+# 4. Set Environment Variables
 ENV PYTHONUNBUFFERED=1
+# Koyeb sets PORT automatically, but we default to 8080 just in case
+ENV PORT=8080
 
-# 6. Start the app
-# No need to run 'playwright install' - it's already baked into this image!
+# 5. Run the app
 CMD ["python", "-u", "App.py"]
