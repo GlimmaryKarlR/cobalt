@@ -1,5 +1,6 @@
 import os
 import time
+import base64
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from playwright.sync_api import sync_playwright
@@ -15,73 +16,81 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def automate_downr_capture(youtube_url):
     """
-    Forces a download by navigating the browser context directly to the 
-    generated video URL, bypassing 403 errors by mimicking a user 'Save As'.
+    Downloads the video by streaming chunks from the browser context to Python.
+    This mimics 'Save Video As' by pulling the raw data directly from the 
+    authenticated browser session.
     """
     timestamp = int(time.time())
     save_path = f"/tmp/{timestamp}_video.mp4"
     
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        # Using a robust context to maintain session
+        # Launch with security disabled to allow cross-origin data pulling
+        browser = p.chromium.launch(headless=True, args=['--disable-web-security'])
         context = browser.new_context(
-            accept_downloads=True,
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         page = context.new_page()
 
-        print(f"🚀 Step 1: Generating Link for {youtube_url}")
+        print(f"🚀 Navigating to Downr for: {youtube_url}")
         page.goto("https://downr.org", wait_until="networkidle", timeout=60000)
 
+        # 1. Generate the links
         page.wait_for_selector("input[placeholder='Paste URL here']")
         page.fill("input[placeholder='Paste URL here']", youtube_url)
         page.click("button:has-text('Download')")
 
-        print("⏳ Step 2: Extracting Best Quality Link...")
+        print("⏳ Waiting for link generation...")
         selectors = ["a:has-text('360p')", "a:has-text('mp4 (360p) avc1')", "a:has-text('mp4 (240p) avc1')"]
         page.wait_for_selector(", ".join(selectors), timeout=90000)
         
+        # 2. Grab the URL
         video_link = None
         for s in selectors:
             loc = page.locator(s).first
             if loc.is_visible():
                 video_link = loc.get_attribute("href")
+                print(f"🎯 Target link extracted: {video_link[:60]}...")
                 break
 
         if not video_link:
             browser.close()
-            raise Exception("Failed to find download link.")
+            raise Exception("Could not find a valid video link.")
 
-        # 3. FORCE DOWNLOAD VIA NAVIGATION
-        # We tell Playwright to expect a download, then we point the browser at the video URL.
-        # This bypasses 403 because it's a top-level navigation, not a 'fetch'.
-        print(f"💾 Step 3: Forcing Browser Download from: {video_link[:50]}...")
+        # 3. THE "SAVE AS" BYPASS: Stream chunks from JS to Python
+        # This prevents the 403 and the "Failed to Fetch" error
+        print("💾 Streaming video data from browser session...")
         
         try:
-            with page.expect_download(timeout=120000) as download_info:
-                # Navigating directly to the video URL often triggers an automatic download 
-                # or a stream that Playwright can intercept as a download.
-                page.goto(video_link)
-            
-            download = download_info.value
-            download.save_as(save_path)
+            # We fetch the video inside the browser and return it as a Hex string 
+            # or Base64. For stability, we'll do one large transfer for Shorts.
+            hex_data = page.evaluate("""
+                async (url) => {
+                    const response = await fetch(url);
+                    const arrayBuffer = await response.arrayBuffer();
+                    const uint8Array = new Uint8Array(arrayBuffer);
+                    let binary = '';
+                    for (let i = 0; i < uint8Array.length; i++) {
+                        binary += String.fromCharCode(uint8Array[i]);
+                    }
+                    return btoa(binary);
+                }
+            """, video_link)
+
+            with open(save_path, "wb") as f:
+                f.write(base64.b64decode(hex_data))
             
             browser.close()
             print(f"✅ Success: File saved to {save_path}")
             return save_path
 
         except Exception as e:
-            # Fallback: If page.goto doesn't trigger a download, we try clicking the link again 
-            # while the page is in 'expect_download' mode.
-            print("⚠️ Navigation download failed, trying explicit click fallback...")
-            page.goto("https://downr.org") # Go back or use history
-            # (Logic to re-generate link omitted for brevity, but you get the idea)
             browser.close()
-            raise Exception(f"Final download attempt failed: {str(e)}")
+            print(f"❌ Streaming Failed: {str(e)}")
+            raise e
 
 @app.route('/', methods=['GET'])
 def health():
-    return "Downloader Engine: Active", 200
+    return "Engine Online", 200
 
 @app.route('/api/process-link', methods=['POST'])
 def process_link():
@@ -95,24 +104,26 @@ def process_link():
     try:
         local_file = automate_downr_capture(video_url)
         
+        # Upload to Supabase Storage
         file_name = os.path.basename(local_file)
         print(f"📤 Uploading {file_name} to Supabase...")
         with open(local_file, "rb") as f:
             supabase.storage.from_("videos").upload(file_name, f, {"content-type": "video/mp4"})
 
-        job_data = {
+        # Update Database
+        job_payload = {
             "video_url": f"videos/{file_name}",
-            "status": "pending",
             "tier_key": 1,
             "mode": "do",
+            "status": "pending",
             "priority": "low"
         }
-        supabase.table("jobs").insert(job_data).execute()
+        db_res = supabase.table("jobs").insert(job_payload).execute()
 
         if os.path.exists(local_file):
             os.remove(local_file)
 
-        return jsonify({"status": "success", "file": file_name})
+        return jsonify({"status": "success", "file": file_name, "job_id": db_res.data[0]['id']})
 
     except Exception as e:
         print(f"❌ Error: {str(e)}")
