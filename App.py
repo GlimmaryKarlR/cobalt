@@ -16,14 +16,22 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def automate_downr_capture(youtube_url):
     """
-    Downloads the video by executing a fetch inside the actual browser context.
-    This bypasses 403 errors by using the browser's authenticated connection.
+    Downloads the video by executing a fetch inside the browser context.
+    Disables web security to bypass CORS restrictions during the fetch.
     """
     timestamp = int(time.time())
     save_path = f"/tmp/{timestamp}_video.mp4"
     
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # CRITICAL FIX: Add args=['--disable-web-security'] to bypass the "Failed to fetch" CORS error
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process'
+            ]
+        )
+        
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
@@ -41,7 +49,7 @@ def automate_downr_capture(youtube_url):
         selectors = ["a:has-text('360p')", "a:has-text('mp4 (360p) avc1')", "a:has-text('mp4 (240p) avc1')"]
         page.wait_for_selector(", ".join(selectors), timeout=90000)
         
-        # 2. Extract the best href
+        # 2. Extract the href
         video_link = None
         for s in selectors:
             loc = page.locator(s).first
@@ -54,30 +62,45 @@ def automate_downr_capture(youtube_url):
             browser.close()
             raise Exception("Direct link extraction failed.")
 
-        # 3. NATIVE BROWSER FETCH (The 403 Bypass)
-        # We tell the browser to download the file into a blob, 
-        # convert it to base64, and send it back to Python.
-        print("💾 Downloading via Browser Context (Native Fetch)...")
+        # 3. NATIVE BROWSER FETCH (CORS Bypass active)
+        print("💾 Downloading via Browser Context (Security Disabled)...")
         
-        b64_data = page.evaluate("""
-            async (url) => {
-                const response = await fetch(url);
-                const blob = await response.blob();
-                return new Promise((resolve) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => resolve(reader.result.split(',')[1]);
-                    reader.readAsDataURL(blob);
-                });
-            }
-        """, video_link)
+        try:
+            # We wrap the fetch in a try/catch inside JS to get better error reporting
+            b64_data = page.evaluate("""
+                async (url) => {
+                    try {
+                        const response = await fetch(url);
+                        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                        const blob = await response.blob();
+                        return new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => resolve(reader.result.split(',')[1]);
+                            reader.onerror = reject;
+                            reader.readAsDataURL(blob);
+                        });
+                    } catch (e) {
+                        return { error: e.message };
+                    }
+                }
+            """, video_link)
 
-        # 4. Save Base64 to File
-        with open(save_path, "wb") as f:
-            f.write(base64.b64decode(b64_data))
-        
-        browser.close()
-        print(f"✅ Success: {save_path}")
-        return save_path
+            # Handle errors returned from inside the evaluate block
+            if isinstance(b64_data, dict) and 'error' in b64_data:
+                raise Exception(f"JS Fetch Error: {b64_data['error']}")
+
+            # 4. Save Base64 to File
+            with open(save_path, "wb") as f:
+                f.write(base64.b64decode(b64_data))
+            
+            browser.close()
+            print(f"✅ Success: {save_path}")
+            return save_path
+
+        except Exception as e:
+            browser.close()
+            print(f"❌ Automation Step Failed: {str(e)}")
+            raise e
 
 @app.route('/', methods=['GET'])
 def health():
@@ -89,7 +112,7 @@ def process_link():
     video_url = data.get('url')
 
     if not video_url:
-        return jsonify({"error": "No URL"}), 400
+        return jsonify({"error": "No URL provided"}), 400
 
     local_file = None
     try:
@@ -102,7 +125,14 @@ def process_link():
             supabase.storage.from_("videos").upload(file_name, f, {"content-type": "video/mp4"})
 
         # Log Job
-        job_data = {"video_url": f"videos/{file_name}", "status": "pending", "tier_key": 1, "mode": "do"}
+        job_data = {
+            "video_url": f"videos/{file_name}",
+            "status": "pending",
+            "tier_key": 1,
+            "mode": "do",
+            "priority": "low",
+            "source": "website"
+        }
         db_res = supabase.table("jobs").insert(job_data).execute()
 
         if os.path.exists(local_file):
