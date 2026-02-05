@@ -1,47 +1,53 @@
 import os
-import subprocess
-import json
+import urllib.parse
 from flask import Flask, request, jsonify
-from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
 
-@app.route('/api/get-redirect', methods=['POST'])
-def get_redirect():
-    data = request.json
+# --- Health Check ---
+# Koyeb looks for a 200 OK on this path to mark the instance as "Healthy"
+@app.route('/', methods=['GET'])
+def health_check():
+    return "OK", 200
+
+# --- Redirection Logic ---
+@app.route('/api/process-link', methods=['POST'])
+def process_link():
+    """
+    Receives a YouTube URL and returns a redirect link to Downr.org
+    to bypass server-side bot detection.
+    """
+    data = request.get_json()
+    
+    if not data or 'url' not in data:
+        return jsonify({"error": "No URL provided"}), 400
+    
     video_url = data.get('url')
     
-    # We use specific Android/iOS clients to bypass the "Bot" check
-    # This mimics the params in the URL you provided (c=ANDROID)
-    cmd = [
-        "yt-dlp",
-        "--get-url",
-        "--no-check-certificates",
-        "--extractor-args", "youtube:player_client=android,ios", 
-        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-        video_url
-    ]
-
     try:
-        print(f"🔗 Fetching direct redirect for: {video_url}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        # URL encode the video link so it passes correctly in the query string
+        encoded_url = urllib.parse.quote(video_url, safe='')
         
-        if result.returncode != 0:
-            print(f"❌ Failed: {result.stderr}")
-            return jsonify({"error": "YouTube blocked the request. Try again."}), 500
-
-        # yt-dlp returns the direct googlevideo.com URLs
-        urls = result.stdout.strip().split('\n')
+        # Construct the Downr referral link
+        # Most downloaders use the ?url= or /#url= pattern
+        redirect_url = f"https://downr.org/?url={encoded_url}"
+        
+        print(f"🔄 Redirecting {video_url} to Downr")
         
         return jsonify({
-            "status": "success",
-            "download_url": urls[0], # This is the link like the one you shared
-            "note": "This link is IP-bound. It must be opened by the same IP that requested it."
-        })
-
+            "status": "redirect",
+            "external_url": redirect_url,
+            "message": "YouTube processing handled via Downr."
+        }), 200
+        
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"💥 Error: {str(e)}")
+        return jsonify({"error": "Failed to generate redirect"}), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    # Koyeb passes the port as an environment variable. 
+    # We default to 8080 as requested.
+    port = int(os.environ.get("PORT", 8080))
+    
+    # host='0.0.0.0' is REQUIRED for cloud deployments
+    app.run(host="0.0.0.0", port=port)
