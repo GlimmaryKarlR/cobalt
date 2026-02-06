@@ -1,7 +1,6 @@
 flask
 flask-cors
 google-genai
-pydantic
-playwright
-playwright-stealth
 yt-dlp
+requests
+gunicorn
