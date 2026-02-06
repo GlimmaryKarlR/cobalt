@@ -1,5 +1,6 @@
 import os
 import time
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from playwright.sync_api import sync_playwright
@@ -19,13 +20,13 @@ def automate_downr_capture(youtube_url):
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        )
+        # Use a consistent User-Agent
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        context = browser.new_context(user_agent=ua)
         page = context.new_page()
 
         print(f"🚀 Step 1: Getting Link from Downr...")
-        page.goto("https://downr.org", wait_until="networkidle", timeout=60000)
+        page.goto("https://downr.org", wait_until="networkidle")
         page.fill("input[placeholder='Paste URL here']", youtube_url)
         page.click("button:has-text('Download')")
 
@@ -33,43 +34,43 @@ def automate_downr_capture(youtube_url):
         page.wait_for_selector("a[href*='googlevideo']", timeout=90000)
         video_link = page.get_attribute("a[href*='googlevideo']", "href")
 
-        if not video_link:
-            browser.close()
-            raise Exception("Could not find video link.")
+        # CRITICAL: Capture the cookies that Google/Downr set
+        cookies = context.cookies()
+        browser.close()
 
-        # --- THE FIX: Follow redirects and only capture 200 OK ---
-        print(f"💾 Step 3: Following Redirects to Final Stream...")
+    # --- THE FIX: Session Hijacking ---
+    print(f"💾 Step 3: Downloading via Authenticated Requests Session...")
+    
+    session = requests.Session()
+    # Pass the Playwright cookies into the Requests session
+    for cookie in cookies:
+        session.cookies.set(cookie['name'], cookie['value'], domain=cookie['domain'])
+    
+    headers = {
+        "User-Agent": ua,
+        "Referer": "https://downr.org/",
+        "Accept": "*/*"
+    }
+
+    try:
+        # stream=True handles the 302 redirects automatically and won't freeze
+        with session.get(video_link, headers=headers, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(save_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
         
-        download_page = context.new_page()
-        
-        try:
-            # We look for the final 200 OK response in the googlevideo domain
-            with download_page.expect_response(
-                lambda res: "videoplayback" in res.url and res.status == 200, 
-                timeout=120000
-            ) as response_info:
-                download_page.goto(video_link)
+        file_size = os.path.getsize(save_path)
+        if file_size < 10000:
+            raise Exception(f"File too small ({file_size} bytes). Download likely failed.")
             
-            response = response_info.value
-            print(f"🎯 Final Stream Found! Status: {response.status} | URL: {response.url[:50]}...")
-            
-            # This blocks until the data is fully "drained"
-            buffer = response.body()
-            
-            if buffer and len(buffer) > 5000:
-                with open(save_path, "wb") as f:
-                    f.write(buffer)
-                print(f"✅ Success: Saved {len(buffer)} bytes.")
-            else:
-                raise Exception("Final response body was empty.")
+        print(f"✅ Success: Downloaded {file_size} bytes.")
+        return save_path
 
-            browser.close()
-            return save_path
-
-        except Exception as e:
-            if 'browser' in locals(): browser.close()
-            print(f"❌ Download Failed: {str(e)}")
-            raise e
+    except Exception as e:
+        print(f"❌ Download Failed: {str(e)}")
+        raise e
 
 @app.route('/api/process-link', methods=['POST'])
 def process_link():
@@ -82,7 +83,7 @@ def process_link():
         local_file = automate_downr_capture(video_url)
         file_name = os.path.basename(local_file)
         
-        print(f"📤 Uploading to Supabase...")
+        print(f"📤 Uploading {file_name} to Supabase...")
         with open(local_file, "rb") as f:
             supabase.storage.from_("videos").upload(file_name, f, {"content-type": "video/mp4"})
 
