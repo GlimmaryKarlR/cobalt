@@ -16,85 +16,90 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def background_worker(youtube_url, job_id):
-    """Handles download with Mouse Movements to bypass aggressive bot detection."""
     local_file = f"/tmp/{job_id}.mp4"
+    debug_screenshot = f"/tmp/debug_{job_id}.png"
+    
     try:
         with sync_playwright() as p:
-            print(f"🧵 [Job {job_id[:8]}] Launching Stealth Browser...")
+            print(f"🧵 [Job {job_id[:8]}] Launching Debug Browser...")
             browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
             context = browser.new_context(
                 accept_downloads=True,
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                viewport={'width': 1280, 'height': 720}
             )
             page = context.new_page()
 
-            # --- HUMAN EMULATION: Mouse Jitter ---
-            page.mouse.move(random.randint(100, 500), random.randint(100, 500))
-            
+            # 1. Navigate
             supabase.table("jobs").update({"current_step": "Navigating to Downloader", "progress_percent": 15}).eq("id", job_id).execute()
             page.goto("https://downr.org", wait_until="networkidle", timeout=60000)
 
-            # Human-like typing
-            page.mouse.click(200, 200) # Click somewhere random first
+            # 2. Input URL
             page.fill("input[placeholder='Paste URL here']", youtube_url)
-            time.sleep(random.uniform(0.5, 1.5))
+            time.sleep(1)
             page.keyboard.press("Enter")
 
-            # Step 2: Trigger the Download with human-like hover
-            download_selector = "a[href*='googlevideo']"
-            page.wait_for_selector(download_selector, timeout=60000)
-            
-            # Move mouse to the button before clicking
-            button_box = page.locator(download_selector).bounding_box()
-            if button_box:
-                page.mouse.move(button_box['x'] + 5, button_box['y'] + 5)
-                time.sleep(0.5)
+            # 3. Handle Potential Ad Popups & Wait for Link
+            print(f"📡 [Job {job_id[:8]}] Waiting for download link to generate...")
+            supabase.table("jobs").update({"current_step": "Waiting for Server Response", "progress_percent": 30}).eq("id", job_id).execute()
 
-            print(f"📡 [Job {job_id[:8]}] Starting human-emulated download...")
-            supabase.table("jobs").update({"current_step": "Downloading (Human Emulated)", "progress_percent": 45}).eq("id", job_id).execute()
+            try:
+                # We wait for the specific download link
+                # If it fails, we take a screenshot before crashing
+                selector = "a[href*='googlevideo']"
+                page.wait_for_selector(selector, timeout=45000)
+                
+                # Human-like click
+                download_btn = page.locator(selector)
+                download_btn.scroll_into_view_if_needed()
+                
+                with page.expect_download(timeout=600000) as download_info:
+                    download_btn.click()
+                
+                download = download_info.value
+                download.save_as(local_file)
+                print(f"✅ [Job {job_id[:8]}] Downloaded to disk.")
 
-            # Start catching the download
-            with page.expect_download(timeout=600000) as download_info:
-                page.locator(download_selector).click()
-            
-            download = download_info.value
-            download.save_as(local_file)
+            except Exception as e:
+                # SAVE SCREENSHOT ON FAILURE
+                page.screenshot(path=debug_screenshot)
+                with open(debug_screenshot, "rb") as f:
+                    supabase.storage.from_("videos").upload(f"debug/error_{job_id}.png", f)
+                print(f"📸 Debug screenshot uploaded to storage/videos/debug/error_{job_id}.png")
+                raise e
+
             browser.close()
 
-        # Step 3: Integrity Check
+        # 4. Integrity and Upload
         file_size = os.path.getsize(local_file)
-        if file_size < 1000000:
-             raise Exception(f"File too small ({file_size / 1024:.1f} KB). Download was blocked or empty.")
+        if file_size < 500000: raise Exception("File truncated.")
 
-        # Step 4: Upload to Supabase
-        supabase.table("jobs").update({"current_step": "Uploading to Storage", "progress_percent": 85}).eq("id", job_id).execute()
+        supabase.table("jobs").update({"current_step": "Uploading to Supabase", "progress_percent": 85}).eq("id", job_id).execute()
         file_name = f"{int(time.time())}_{job_id[:8]}.mp4"
         with open(local_file, "rb") as f:
             supabase.storage.from_("videos").upload(file_name, f, {"content-type": "video/mp4", "x-upsert": "true"})
 
-        # Step 5: Finalize
+        # 5. Finalize
         supabase.table("jobs").update({
             "video_url": f"videos/{file_name}",
             "status": "waiting",
             "current_step": "Ready",
             "progress_percent": 100
         }).eq("id", job_id).execute()
-        print(f"✅ [Job {job_id[:8]}] Success.")
 
     except Exception as e:
-        error_msg = str(e)[:250]
-        print(f"❌ [Job {job_id[:8]}] Failed: {error_msg}")
-        supabase.table("jobs").update({"status": "failed", "error_message": f"Worker Error: {error_msg}"}).eq("id", job_id).execute()
+        error_msg = f"Worker Error: {str(e)[:150]}"
+        print(f"❌ {error_msg}")
+        supabase.table("jobs").update({"status": "failed", "error_message": error_msg}).eq("id", job_id).execute()
     finally:
-        if os.path.exists(local_file):
-            os.remove(local_file)
+        for f in [local_file, debug_screenshot]:
+            if os.path.exists(f): os.remove(f)
 
 @app.route('/api/process-link', methods=['POST'])
 def process_link():
     try:
         data = request.get_json()
-        video_url = data.get('url') or (data.get('record') and data.get('record').get('url'))
-        if not video_url: return jsonify({"status": "error", "message": "No URL"}), 400
+        url = data.get('url') or (data.get('record') and data.get('record').get('url'))
+        if not url: return jsonify({"status": "error", "message": "No URL"}), 400
 
         job_res = supabase.table("jobs").insert({
             "video_url": "pending", "status": "downloading", "progress_percent": 5,
@@ -102,7 +107,7 @@ def process_link():
         }).execute()
         
         job_id = job_res.data[0]['id']
-        threading.Thread(target=background_worker, args=(video_url, job_id)).start()
+        threading.Thread(target=background_worker, args=(url, job_id)).start()
         return jsonify({"status": "success", "id": job_id, "job_id": job_id}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
