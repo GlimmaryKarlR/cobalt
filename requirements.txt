@@ -9,5 +9,5 @@ requests
 # The Downloader & Bypassing Tools
 yt-dlp
 yt-dlp-ejs
-yt-dlp-youtube-oauth2 
 curl_cffi
+
