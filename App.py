@@ -1,62 +1,96 @@
 import os
-import uuid
-import threading
 import json
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from google import genai
-from pydantic import BaseModel
-from typing import List
+import yt_dlp
+import requests
 
 app = Flask(__name__)
-CORS(app)
+CORS(app)  # Enables cross-origin requests from your Vite frontend
 
-# Load API Key from Koyeb Environment Variables
+# Securely retrieve the API key from Koyeb Environment Variables
 GEMINI_API_KEY = os.environ.get("VITE_GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Define the exact structure your Frontend (AnalysisView.tsx) expects
-class KeyMoment(BaseModel):
-    time: str
-    description: str
-
-class VideoAnalysis(BaseModel):
-    summary: str
-    keyMoments: List[KeyMoment]
-    tags: List[str]
-    sentiment: str
-    engagementScore: int
+@app.route('/api/process-link', methods=['POST'])
+def process_link():
+    """
+    Handles stealth retrieval of video links to extract the direct MP4 URL
+    for processing by the AGSI ingestion agent.
+    """
+    data = request.json
+    video_url = data.get('url')
+    
+    ydl_opts = {
+        'format': 'best',
+        'noplaylist': True,
+        'quiet': True,
+    }
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            # In a production scenario, you would trigger your Supabase 
+            # processing job here using the direct URL.
+            return jsonify({
+                "status": "success",
+                "title": info.get('title'),
+                "job_id": "auto-triggered-backend-job" 
+            })
+    except Exception as e:
+        return jsonify({"status": "failed", "error": str(e)}), 400
 
 @app.route('/api/analyze', methods=['POST'])
-def analyze_video():
-    """Securely analyzes video content using the hidden API key."""
-    data = request.json
-    video_title = data.get("title")
-    context = data.get("context", "")
-
-    prompt = f"""
-    Perform a professional AI analysis for a video titled "{video_title}". 
-    Additional context: {context}.
-    Provide a concise summary, 5 key moments with timestamps, 8 relevant tags, 
-    an overall sentiment (e.g. 'Positive'), and an engagement score out of 100.
+def analyze_data():
     """
+    Performs secure Gemini analysis on the ingested CSV data.
+    """
+    data = request.json
+    csv_url = data.get('url')
+    system_prompt = data.get('system_prompt')
 
     try:
-        # Generate structured content
+        # Fetch the CSV content from Supabase storage
+        csv_response = requests.get(csv_url)
+        csv_text = csv_response.text
+
+        # Securely call Gemini without exposing keys to the browser
         response = client.models.generate_content(
-            model='gemini-2.0-flash', # Or your preferred version
-            contents=prompt,
-            config={
-                'response_mime_type': 'application/json',
-                'response_schema': VideoAnalysis,
-            }
+            model="gemini-2.0-flash",
+            config=genai.types.GenerateContentConfig(
+                system_instruction=system_prompt
+            ),
+            contents=[f"Here is the kinematic data: \n\n{csv_text}"]
         )
-        return response.text # Returns the raw JSON string matching the schema
+        
+        return jsonify({"status": "success", "response": response.text})
+    except Exception as e:
+        return jsonify({"status": "failed", "error": str(e)}), 500
+
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    """
+    Backend-to-AI chat endpoint for the Formulaic RAG experience.
+    """
+    data = request.json
+    user_message = data.get('message')
+    knowledge_base = data.get('knowledge_base', '')
+    system_prompt = data.get('system_prompt')
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            config=genai.types.GenerateContentConfig(
+                system_instruction=f"{system_prompt}\n\nContext Data: {knowledge_base}"
+            ),
+            contents=[user_message]
+        )
+        return jsonify({"response": response.text})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ... Keep your existing /api/download and /api/status logic here ...
-
 if __name__ == '__main__':
+    # Koyeb provides the PORT environment variable
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
