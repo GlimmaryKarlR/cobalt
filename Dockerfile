@@ -1,17 +1,27 @@
-# 1. Official Playwright image (v1.58.0 matches the latest pip package)
-FROM mcr.microsoft.com/playwright/python:v1.58.0-noble
+# 1. Official Playwright image
+FROM mcr.microsoft.com/playwright/python:v1.48.0-noble
 
 WORKDIR /app
 
-# 2. Pin playwright to 1.58.0 so it matches the image browsers perfectly
-RUN pip install --no-cache-dir playwright==1.58.0 flask flask-cors supabase yt-dlp
+# 2. Install dependencies (Added 'requests' here)
+RUN pip install --no-cache-dir \
+    playwright==1.48.0 \
+    flask \
+    flask-cors \
+    supabase \
+    requests \
+    yt-dlp
 
-# 3. Copy your app files
+# 3. Ensure the browsers are fully installed and dependencies met
+RUN playwright install chromium
+RUN playwright install-deps chromium
+
+# 4. Copy your app files
 COPY . .
 
-# 4. Environment Variables
+# 5. Environment Variables
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8080
 
-# 5. Run the app
-CMD ["python", "-u", "App.py"]
+# 6. Run the app (using python3 to be safe)
+CMD ["python3", "-u", "App.py"]
