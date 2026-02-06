@@ -8,7 +8,5 @@ requests
 
 # The Downloader & Bypassing Tools
 yt-dlp
-ytdlp-plugins
-ytdlp-auf1
-ytdlp-brighteon
+yt-dlp-ejs
 curl_cffi
