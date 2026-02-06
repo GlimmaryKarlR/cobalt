@@ -33,9 +33,20 @@ def background_worker(youtube_url, job_id):
 
         # FIXED INDENTATION HERE
         ydl_opts = {
-            'format': 'best', 
+            'format': 'best',
             'outtmpl': local_file,
             'cookiefile': COOKIE_FILE,
+            'socket_timeout': 30,
+            'retries': 10,
+            'quiet': True,
+            'no_warnings': False,  # Turn this on for now to see what's happening
+            'nocheckcertificate': True,
+            # This is the secret sauce for "fragment not found" errors:
+            'hls_prefer_native': False,
+            'external_downloader': 'ffmpeg',
+            'external_downloader_args': {
+                'ffmpeg_i': ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5']
+            },
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
