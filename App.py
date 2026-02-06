@@ -31,8 +31,8 @@ def background_worker(youtube_url, job_id):
             "progress_percent": 30
         }).eq("id", job_id).execute()
 
-       ydl_opts = {
-            # Try to get high-quality MP4, but fall back to any 'best' format if needed
+        # FIXED INDENTATION HERE
+        ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'outtmpl': local_file,
             'cookiefile': COOKIE_FILE,
@@ -40,7 +40,6 @@ def background_worker(youtube_url, job_id):
             'retries': 10,
             'quiet': True,
             'no_warnings': True,
-            # This ensures the final output is ALWAYS an mp4 regardless of source
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
@@ -55,8 +54,10 @@ def background_worker(youtube_url, job_id):
         if not os.path.exists(local_file):
             raise Exception("Download failed: No file generated.")
 
-        file_size = os.path.getsize(local_file)
-        supabase.table("jobs").update({"current_step": "Finalizing Cloud Storage", "progress_percent": 85}).eq("id", job_id).execute()
+        supabase.table("jobs").update({
+            "current_step": "Finalizing Cloud Storage", 
+            "progress_percent": 85
+        }).eq("id", job_id).execute()
 
         file_name = f"{int(time.time())}_{job_id[:8]}.mp4"
         with open(local_file, "rb") as f:
@@ -73,10 +74,14 @@ def background_worker(youtube_url, job_id):
 
     except Exception as e:
         print(f"❌ Failure: {str(e)}")
-        supabase.table("jobs").update({"status": "failed", "error_message": str(e)[:150]}).eq("id", job_id).execute()
+        supabase.table("jobs").update({
+            "status": "failed", 
+            "error_message": str(e)[:150]
+        }).eq("id", job_id).execute()
     finally:
-        if os.path.exists(local_file): os.remove(local_file)
-
+        if os.path.exists(local_file): 
+            os.remove(local_file)
+            
 @app.route('/api/process-link', methods=['POST'])
 def process_link():
     data = request.get_json()
