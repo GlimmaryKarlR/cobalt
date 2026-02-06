@@ -1,14 +1,7 @@
-# Web Framework & API
 flask
 flask-cors
-
-# The Core Downloader (Keep this updated for YouTube blocks)
-yt-dlp
-
-# AI Agent / Browser Automation
-playwright==1.49.0
+google-genai
+pydantic
+playwright
 playwright-stealth
-
-# Networking & Utilities
-certifi
-requests
+yt-dlp
