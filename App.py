@@ -33,22 +33,13 @@ def background_worker(youtube_url, job_id):
 
         # FIXED INDENTATION HERE
         ydl_opts = {
-            # 1. Grab the single best quality file YouTube offers, no matter the extension
             'format': 'best', 
             'outtmpl': local_file,
             'cookiefile': COOKIE_FILE,
-            'socket_timeout': 30,
-            'retries': 10,
-            'quiet': True,
-            'no_warnings': True,
-            
-            # 2. Tell FFmpeg: "Whatever you just got, make it an MP4"
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
             }],
-            
-            # 3. Add metadata and fix "Fast Start" so the video plays instantly in browsers
             'postprocessor_args': ['-movflags', 'faststart'],
         }
 
