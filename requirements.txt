@@ -1,0 +1,11 @@
+# Web Server
+flask
+flask-cors
+
+# Cloud Storage & Database
+supabase
+requests
+
+# The Downloader & Bypassing Tools
+yt-dlp
+curl_cffi
