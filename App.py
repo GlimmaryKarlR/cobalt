@@ -31,14 +31,16 @@ def background_worker(youtube_url, job_id):
             "progress_percent": 30
         }).eq("id", job_id).execute()
 
-        ydl_opts = {
+       ydl_opts = {
+            # Try to get high-quality MP4, but fall back to any 'best' format if needed
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'outtmpl': local_file,
-            'cookiefile': COOKIE_FILE, # Pointing to your repo file
+            'cookiefile': COOKIE_FILE,
             'socket_timeout': 30,
             'retries': 10,
             'quiet': True,
             'no_warnings': True,
+            # This ensures the final output is ALWAYS an mp4 regardless of source
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
