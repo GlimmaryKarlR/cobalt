@@ -32,19 +32,18 @@ def background_worker(youtube_url, job_id):
             'outtmpl': local_file,
             'cookiefile': COOKIE_FILE,
             'nocheckcertificate': True,
-            # This is the key: match the browser that exported the cookies
-            'impersonate': 'chrome', 
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-us,en;q=0.5',
-            },
+            'impersonate': 'chrome',
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['web'], # Use the client that matches your desktop cookies
-                    'player_skip': ['ios', 'android', 'tv'] 
+                    'po_token': 'web+MlOIBQ-9cxO2dIg5E1pbitCc9EmKvr-zQ_FP5A3LiruxAWph5vqcYKlntiDwm9Eqlm_fUEczErbBZAWhAGewsEWWZnQOWWdsWimI16DH1U8dcNYX-Q==',
+                    'visitor_data': 'CgtkYmhNMVVuOTFqOCjgypjMBjIKCgJVUxIEGgAga2LfAgrcAjE1LllUPUxJc0pxSEpJa1pHWHplSVZISWt2VFBENUpjQlkwcWlFcTUwZ0hlalMycE9hWVRSZ1VBOWVRRnpWTnEyTTZKTzJRcl9ZWkVVU1FMU01vQTk4a1A4VllXNjl5SlM1SWlLQXRTbkJadGhBckgzVGhBTm9tc1ZnMHNWWHAzVk9zUWFCa2RfZE5SMHJicmdRVzlBQzJXUkxSVmFvLXhOclduYm9MUVZSbXAtb1d0RUVJSmk1OGQ5alhHQUVxQ3V2YnV0U1RiS0t1WFJ4T0U0cWpBR0w0X20tMjlnYkV3anhYOEEwN1d5RThDWUNMRFpaSHdQd1FIbERUbU9oeVk5U0d2enBaZDB5RlB1cTF6SGhxcTZST29rRUdoX1ZfbUNUS3VwRU5kczF4eG9JdHpfVDVtUUFsQzJPVUVCbHRhWlE0ZS1vOWt5WjlFdS1XQk1iTlpZaHFteGZRUQ==',
+                    'player_client': ['web'],
                 }
             },
+            'postprocessors': [{
+                'key': 'FFmpegVideoConvertor',
+                'preferedformat': 'mp4',
+            }],
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
