@@ -36,22 +36,34 @@ def background_worker(youtube_url, job_id):
             'format': 'best',
             'outtmpl': local_file,
             'cookiefile': COOKIE_FILE,
-            'socket_timeout': 30,
-            'retries': 10,
-            'quiet': True,
-            'no_warnings': False,  # Turn this on for now to see what's happening
             'nocheckcertificate': True,
-            # This is the secret sauce for "fragment not found" errors:
-            'hls_prefer_native': False,
+            'quiet': False, # Keep this False so we can see the logs if it fails
+            
+            # --- THE FIX: CLIENT SPOOFING ---
+            'impersonate': 'chrome', # Tells YouTube you are a real browser
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Referer': 'https://www.youtube.com/',
+            },
+            
+            # --- THE FIX: DOWNLOADER STABILITY ---
+            'hls_use_native__hls': True,
             'external_downloader': 'ffmpeg',
             'external_downloader_args': {
-                'ffmpeg_i': ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5']
+                'ffmpeg_i': [
+                    '-reconnect', '1', 
+                    '-reconnect_streamed', '1', 
+                    '-reconnect_delay_max', '5',
+                    '-headers', f'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+                ]
             },
+            
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
             }],
-            'postprocessor_args': ['-movflags', 'faststart'],
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
