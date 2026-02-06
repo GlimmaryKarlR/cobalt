@@ -19,14 +19,15 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 6. Pre-install ONLY the Chromium browser (to save space/time)
-# This ensures the "Agent" has its browser ready to go
+# This ensures the "Agent" has its browser ready to go in the container
 RUN playwright install chromium
 
 # 7. Copy the rest of your application code
 COPY . .
 
-# 8. Expose the port your Flask app runs on
-EXPOSE 8000
+# 8. Expose the port Koyeb expects
+EXPOSE 8080
 
-# 9. Start the application
+# 9. Start the application using the Port environment variable
+# We use the shell form or a direct call to App.py
 CMD ["python", "App.py"]
