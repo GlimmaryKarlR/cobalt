@@ -28,22 +28,17 @@ def background_worker(youtube_url, job_id):
         
         # Exact 8-space indentation for the ydl_opts dictionary
         ydl_opts = {
-            # Priority 1: High quality MP4 (ID 22 is 720p)
-            # Priority 2: Best available if 22 is missing
-            'format': '22/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
+            'format': 'best',
             'outtmpl': local_file,
-            'cookiefile': COOKIE_FILE,
+            'username': 'oauth2',  # This triggers the plugin
+            'password': '',        # Must be empty string
             'nocheckcertificate': True,
             'extractor_args': {
                 'youtube': {
                     'player_client': ['android', 'ios'],
-                    'player_skip': ['web'] 
+                    'player_skip': ['web']
                 }
             },
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }],
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
