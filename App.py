@@ -28,19 +28,28 @@ def background_worker(youtube_url, job_id):
         
         # Exact 8-space indentation for the ydl_opts dictionary
         ydl_opts = {
-            # Try to get a single file that already has video+audio
-            'format': 'bestvideo+bestaudio/best', 
-            'outtmpl': local_file,
-            'cookiefile': COOKIE_FILE,
-            'nocheckcertificate': True,
-            'quiet': False,
-            # This helps solve the "n challenge"
-            'allow_unplayable_formats': True,
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }],
-        }
+                    # Use format '22' for the highest compatibility without merging
+                    # or 'bestvideo+bestaudio/best' for maximum quality
+                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/22/best',
+                    'outtmpl': local_file,
+                    'cookiefile': COOKIE_FILE,
+                    'nocheckcertificate': True,
+                    # This is the secret sauce to match your console command
+                    'allow_unplayable_formats': True,
+                    'dynamic_mpd': True,
+                    'extractor_args': {
+                        'youtube': {
+                            # This replaces the need for --remote-components ejs:github 
+                            # by telling yt-dlp to prioritize clients with simpler challenges
+                            'player_client': ['android', 'ios'],
+                            'player_skip': ['web'] 
+                        }
+                    },
+                    'postprocessors': [{
+                        'key': 'FFmpegVideoConvertor',
+                        'preferedformat': 'mp4',
+                    }],
+            }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([youtube_url])
