@@ -33,33 +33,17 @@ def background_worker(youtube_url, job_id):
             "progress_percent": 30
         }).eq("id", job_id).execute()
 
-        ydl_opts = {
+       ydl_opts = {
             'format': 'best',
             'outtmpl': local_file,
-            'cookiefile': COOKIE_FILE,  # <--- FIXED: Now matches your variable
+            'cookiefile': COOKIE_FILE,
             'nocheckcertificate': True,
-            'impersonate': 'chrome', 
+            'quiet': False, # We WANT to see the output now
+            'no_warnings': False,
+            # Let's use standard yt-dlp first to see if it even connects
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Origin': 'https://www.youtube.com',
-                'Referer': 'https://www.youtube.com/',
             },
-            'external_downloader': 'ffmpeg',
-            'external_downloader_args': {
-                'ffmpeg_i': [
-                    '-reconnect', '1', 
-                    '-reconnect_streamed', '1', 
-                    '-reconnect_delay_max', '5',
-                    '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' + '\r\n'
-                ]
-            },
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }],
-            'postprocessor_args': ['-movflags', 'faststart'],
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
