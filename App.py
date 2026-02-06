@@ -1,100 +1,112 @@
 import os
-import time
+import uuid
 import threading
-import yt_dlp
+import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from supabase import create_client, Client
+import yt_dlp
+from playwright.sync_api import sync_playwright
+from playwright_stealth import stealth_sync
 
 app = Flask(__name__)
 CORS(app)
 
-# Configuration
-SUPABASE_URL = "https://wherenftvmhfzhbegftb.supabase.co"
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Storage for job status
+jobs = {}
 
-COOKIE_FILE = "youtube_cookies.txt"
+def get_stealth_tokens(video_url):
+    """
+    The 'Agent' process: Opens a real browser to fetch human-validated tokens.
+    """
+    print("🤖 Agent: Opening stealth browser...")
+    with sync_playwright() as p:
+        # Launch headless browser
+        browser = p.chromium.launch(headless=True)
+        # Use a real-looking User Agent
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
+        stealth_sync(page) # Hide automation signatures
 
-def background_worker(youtube_url, job_id):
-    local_file = f"/tmp/{job_id}.mp4"
-    
-    try:
-        if not os.path.exists(COOKIE_FILE):
-            print(f"❌ ERROR: {COOKIE_FILE} missing", flush=True)
-            raise Exception(f"{COOKIE_FILE} not found")
-
-        print(f"🧵 [Job {job_id[:8]}] Starting Download...", flush=True)
+        # Navigate to a generic YouTube page first to establish cookies
+        page.goto("https://www.youtube.com/embed/aqz-KE-bpKQ", wait_until="networkidle")
         
-        # Exact 8-space indentation for the ydl_opts dictionary
+        # Extract Visitor Data from the browser's cookies/context
+        cookies = context.cookies()
+        visitor_data = None
+        for cookie in cookies:
+            if cookie['name'] == 'VISITOR_INFO1_LIVE':
+                visitor_data = cookie['value']
+        
+        # Note: In a production 'Agent', you could also scrape the 'poToken' 
+        # from network requests here, but visitor_data is the start.
+        
+        browser.close()
+        return visitor_data, cookies
+
+def download_task(job_id, video_url):
+    try:
+        jobs[job_id]["status"] = "processing"
+        jobs[job_id]["current_step"] = "AI Agent Authenticating"
+
+        # 1. RUN THE AGENT
+        visitor_data, stealth_cookies = get_stealth_tokens(video_url)
+        
+        # 2. CONFIGURE YT-DLP WITH AGENT DATA
+        local_filename = f"{job_id}.mp4"
         ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'outtmpl': local_file,
-            'cookiefile': COOKIE_FILE,
-            'nocheckcertificate': True,
-            'impersonate': 'chrome',
+            'format': 'best',
+            'outtmpl': local_filename,
+            'quiet': False,
+            'no_warnings': False,
+            # We pass the 'Human' data we just grabbed
             'extractor_args': {
                 'youtube': {
-                    'po_token': 'web+MlOIBQ-9cxO2dIg5E1pbitCc9EmKvr-zQ_FP5A3LiruxAWph5vqcYKlntiDwm9Eqlm_fUEczErbBZAWhAGewsEWWZnQOWWdsWimI16DH1U8dcNYX-Q==',
-                    'visitor_data': 'CgtkYmhNMVVuOTFqOCjgypjMBjIKCgJVUxIEGgAga2LfAgrcAjE1LllUPUxJc0pxSEpJa1pHWHplSVZISWt2VFBENUpjQlkwcWlFcTUwZ0hlalMycE9hWVRSZ1VBOWVRRnpWTnEyTTZKTzJRcl9ZWkVVU1FMU01vQTk4a1A4VllXNjl5SlM1SWlLQXRTbkJadGhBckgzVGhBTm9tc1ZnMHNWWHAzVk9zUWFCa2RfZE5SMHJicmdRVzlBQzJXUkxSVmFvLXhOclduYm9MUVZSbXAtb1d0RUVJSmk1OGQ5alhHQUVxQ3V2YnV0U1RiS0t1WFJ4T0U0cWpBR0w0X20tMjlnYkV3anhYOEEwN1d5RThDWUNMRFpaSHdQd1FIbERUbU9oeVk5U0d2enBaZDB5RlB1cTF6SGhxcTZST29rRUdoX1ZfbUNUS3VwRU5kczF4eG9JdHpfVDVtUUFsQzJPVUVCbHRhWlE0ZS1vOWt5WjlFdS1XQk1iTlpZaHFteGZRUQ==',
                     'player_client': ['web'],
+                    'visitor_data': visitor_data if visitor_data else ""
                 }
             },
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }],
         }
+
+        print(f"🧵 [Job {job_id}] Agent handshake complete. Starting download...")
+        jobs[job_id]["current_step"] = "Downloading Video"
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([youtube_url])
+            ydl.download([video_url])
 
-        if os.path.exists(local_file):
-            print(f"✅ Uploading {local_file}...", flush=True)
-            file_name = f"{int(time.time())}_{job_id[:8]}.mp4"
-            with open(local_file, "rb") as f:
-                supabase.storage.from_("videos").upload(file_name, f, {"content-type": "video/mp4"})
-
-            supabase.table("jobs").update({
-                "video_url": f"videos/{file_name}",
-                "status": "waiting",
-                "current_step": "Ready",
-                "progress_percent": 100
-            }).eq("id", job_id).execute()
-        else:
-            raise Exception("File creation failed")
+        jobs[job_id]["status"] = "completed"
+        jobs[job_id]["progress_percent"] = 100
+        jobs[job_id]["result_url"] = f"https://your-app.koyeb.app/download/{local_filename}"
 
     except Exception as e:
-        error_text = str(e)
-        print(f"❌ Failure: {error_text}", flush=True)
-        supabase.table("jobs").update({
-            "status": "failed", 
-            "error_message": error_text[:200]
-        }).eq("id", job_id).execute()
-    finally:
-        if os.path.exists(local_file):
-            os.remove(local_file)
+        print(f"❌ Failure in Job {job_id}: {traceback.format_exc()}")
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error_message"] = str(e)
 
 @app.route('/api/process-link', methods=['POST'])
 def process_link():
-    try:
-        data = request.get_json()
-        url = data.get('url') or (data.get('record') and data.get('record').get('url'))
-        
-        if not url:
-            return jsonify({"error": "No URL provided"}), 400
+    data = request.json
+    video_url = data.get("url")
+    if not video_url:
+        return jsonify({"error": "No URL provided"}), 400
 
-        job_res = supabase.table("jobs").insert({
-            "video_url": "pending", "status": "downloading", "progress_percent": 5,
-            "current_step": "Initializing", "mode": "do", "tier_key": 1, "priority": "low"
-        }).execute()
-        
-        job_id = job_res.data[0]['id']
-        threading.Thread(target=background_worker, args=(url, job_id)).start()
-        return jsonify({"status": "success", "id": job_id}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "id": job_id,
+        "status": "pending",
+        "progress_percent": 5,
+        "current_step": "Initializing Agent"
+    }
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    thread = threading.Thread(target=download_task, args=(job_id, video_url))
+    thread.start()
+
+    return jsonify(jobs[job_id])
+
+@app.route('/api/job-status/<job_id>')
+def get_status(job_id):
+    return jsonify(jobs.get(job_id, {"error": "Job not found"}))
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8000)
