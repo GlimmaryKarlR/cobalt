@@ -28,15 +28,21 @@ def background_worker(youtube_url, job_id):
         
         # Exact 8-space indentation for the ydl_opts dictionary
         ydl_opts = {
-            'format': 'best',
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'outtmpl': local_file,
-            'username': 'oauth2',  # This triggers the plugin
-            'password': '',        # Must be empty string
+            'cookiefile': COOKIE_FILE,
             'nocheckcertificate': True,
+            # This is the key: match the browser that exported the cookies
+            'impersonate': 'chrome', 
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-us,en;q=0.5',
+            },
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'ios'],
-                    'player_skip': ['web']
+                    'player_client': ['web'], # Use the client that matches your desktop cookies
+                    'player_skip': ['ios', 'android', 'tv'] 
                 }
             },
         }
