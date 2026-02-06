@@ -93,59 +93,62 @@ def auto_cleanup(filepath, delay=600):
         print(f"🧹 [Cleanup] Deleted temporary file: {filepath}")
 
 def download_task(job_id, video_url):
-    cookie_path = None
     try:
         jobs[job_id].update({"status": "processing", "current_step": "AI Agent: Authenticating"})
         
-        # 1. Fetch Session from the Agent
-        visitor_data, cookie_path = get_stealth_session(video_url)
-        
-        if not cookie_path:
-            raise Exception("Agent could not bypass YouTube detection. Try again later.")
+        # We now run EVERYTHING inside one browser context
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36")
+            stealth = Stealth()
+            page = context.new_page()
+            stealth.apply_stealth_sync(page)
 
-        # 2. Configure Downloader
-        local_filename = f"{job_id}.mp4"
-        local_path = os.path.join(DOWNLOAD_DIR, local_filename)
-        
-        ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'outtmpl': local_path,
-            'cookiefile': cookie_path,
-            'nocheckcertificate': True,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['web'],
-                    'visitor_data': visitor_data
-                }
-            },
-        }
+            # 1. Warm up the session
+            page.goto("https://www.youtube.com/embed/aqz-KE-bpKQ", wait_until="networkidle")
+            page.wait_for_timeout(4000)
+            
+            # 2. Extract tokens while browser is LIVE
+            cookies = context.cookies()
+            visitor_data = next((c['value'] for c in cookies if c['name'] == 'VISITOR_INFO1_LIVE'), "")
+            
+            # Create the cookie file
+            cookie_path = os.path.join(DOWNLOAD_DIR, f"cookies_{job_id}.txt")
+            with open(cookie_path, "w") as f:
+                f.write("# Netscape HTTP Cookie File\n")
+                for c in cookies:
+                    domain = c['domain'] if c['domain'].startswith('.') else f".{c['domain']}"
+                    f.write(f"{domain}\tTRUE\t{c['path']}\t{'TRUE' if c['secure'] else 'FALSE'}\t{int(c.get('expires', 2147483647))}\t{c['name']}\t{c['value']}\n")
 
-        jobs[job_id]["current_step"] = "Downloading Streams"
-        print(f"🧵 [Job {job_id}] Transferring session to yt-dlp...")
+            # 3. Download IMMEDIATELY while browser session is active
+            local_filename = f"{job_id}.mp4"
+            local_path = os.path.join(DOWNLOAD_DIR, local_filename)
+            
+            ydl_opts = {
+                'format': 'best',
+                'outtmpl': local_path,
+                'cookiefile': cookie_path,
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['web'],
+                        'visitor_data': visitor_data,
+                        # Adding the 'po_token' requirement
+                        'po_token': 'web+MlOIBQ-9cxO2dIg5E1pbitCc9EmKvr-zQ_FP5A3LiruxAWph5vqcYKlntiDwm9Eqlm_fUEczErbBZAWhAGewsEWWZnQOWWdsWimI16DH1U8dcNYX-Q=='
+                    }
+                },
+            }
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([video_url])
+            jobs[job_id]["current_step"] = "Downloading"
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([video_url])
+            
+            browser.close() # Now we close it
 
-        # 3. Finalize Job
-        jobs[job_id].update({
-            "status": "completed",
-            "progress_percent": 100,
-            "result_url": f"/download/{local_filename}"
-        })
-
-        # Start background cleanup (delete in 10 minutes)
-        threading.Thread(target=auto_cleanup, args=(local_path, 600)).start()
+        jobs[job_id].update({"status": "completed", "progress_percent": 100, "result_url": f"/download/{local_filename}"})
 
     except Exception as e:
-        print(f"🚨 Job {job_id} Error: {traceback.format_exc()}")
-        jobs[job_id].update({
-            "status": "failed",
-            "error_message": str(e)
-        })
-    finally:
-        # Delete cookie file immediately
-        if cookie_path and os.path.exists(cookie_path):
-            os.remove(cookie_path)
+        print(f"🚨 Error: {traceback.format_exc()}")
+        jobs[job_id].update({"status": "failed", "error_message": str(e)})
 
 @app.route('/api/process-link', methods=['POST'])
 def process_link():
