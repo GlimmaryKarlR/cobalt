@@ -21,25 +21,24 @@ def background_worker(youtube_url, job_id):
     local_file = f"/tmp/{job_id}.mp4"
     
     try:
-        # Check if the file actually exists in the build
+        # 1. VERIFY FILE (Crucial for debugging)
         if not os.path.exists(COOKIE_FILE):
-            raise Exception(f"{COOKIE_FILE} not found in root directory!")
+            print(f"❌ CRITICAL ERROR: {COOKIE_FILE} not found! Directory contents: {os.listdir('.')}", flush=True)
+            raise Exception(f"{COOKIE_FILE} missing from root")
 
-        print(f"🧵 [Job {job_id[:8]}] Starting Authenticated Download...")
+        print(f"🧵 [Job {job_id[:8]}] Starting Authenticated Download...", flush=True)
+        
         supabase.table("jobs").update({
             "current_step": "Downloading with Session Cookies", 
             "progress_percent": 30
         }).eq("id", job_id).execute()
 
-        # FIXED INDENTATION HERE
         ydl_opts = {
             'format': 'best',
             'outtmpl': local_file,
-            'cookiefile': 'cookies.txt', # Double check this filename!
+            'cookiefile': COOKIE_FILE,  # <--- FIXED: Now matches your variable
             'nocheckcertificate': True,
-            
-            # --- THE "BYPASS" STRATEGY ---
-            'impersonate': 'chrome', # Requires curl_cffi in requirements.txt
+            'impersonate': 'chrome', 
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': '*/*',
@@ -47,8 +46,6 @@ def background_worker(youtube_url, job_id):
                 'Origin': 'https://www.youtube.com',
                 'Referer': 'https://www.youtube.com/',
             },
-            
-            # --- FORCE FFMPEG TO USE HEADERS ---
             'external_downloader': 'ffmpeg',
             'external_downloader_args': {
                 'ffmpeg_i': [
@@ -58,7 +55,6 @@ def background_worker(youtube_url, job_id):
                     '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' + '\r\n'
                 ]
             },
-            
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
@@ -69,14 +65,11 @@ def background_worker(youtube_url, job_id):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([youtube_url])
 
-        # Verification & Upload
         if not os.path.exists(local_file):
-            raise Exception("Download failed: No file generated.")
+            # Check if maybe it downloaded as .mkv or something else despite our request
+            raise Exception("FFmpeg failed to produce the final .mp4 file.")
 
-        supabase.table("jobs").update({
-            "current_step": "Finalizing Cloud Storage", 
-            "progress_percent": 85
-        }).eq("id", job_id).execute()
+        print(f"✅ Downloaded locally. Uploading to Supabase...", flush=True)
 
         file_name = f"{int(time.time())}_{job_id[:8]}.mp4"
         with open(local_file, "rb") as f:
@@ -89,13 +82,14 @@ def background_worker(youtube_url, job_id):
             "progress_percent": 100
         }).eq("id", job_id).execute()
         
-        print(f"✅ [Job {job_id[:8]}] Success!")
+        print(f"🚀 [Job {job_id[:8]}] Success!", flush=True)
 
     except Exception as e:
-        print(f"❌ Failure: {str(e)}")
+        error_text = str(e)
+        print(f"❌ Failure: {error_text}", flush=True)
         supabase.table("jobs").update({
             "status": "failed", 
-            "error_message": str(e)[:150]
+            "error_message": error_text[:200]
         }).eq("id", job_id).execute()
     finally:
         if os.path.exists(local_file): 
