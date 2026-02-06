@@ -1,27 +1,28 @@
-# 1. Official Playwright image
-FROM mcr.microsoft.com/playwright/python:v1.48.0-noble
+# 1. Use a slim Python image (much faster to deploy)
+FROM python:3.9-slim
+
+# 2. Install FFmpeg (Essential for the "Universal" convert-to-mp4 strategy)
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# 2. Install dependencies (Added 'requests' here)
+# 3. Install Python dependencies
+# Note: Removed playwright as it's no longer needed for the cookie method
 RUN pip install --no-cache-dir \
-    playwright==1.48.0 \
     flask \
     flask-cors \
     supabase \
     requests \
     yt-dlp
 
-# 3. Ensure the browsers are fully installed and dependencies met
-RUN playwright install chromium
-RUN playwright install-deps chromium
-
-# 4. Copy your app files
+# 4. Copy your app files (including App.py and cookies.txt)
 COPY . .
 
 # 5. Environment Variables
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8080
 
-# 6. Run the app (using python3 to be safe)
-CMD ["python3", "-u", "App.py"]
+# 6. Run the app
+CMD ["python", "App.py"]
