@@ -3,6 +3,7 @@ FROM python:3.10-slim
 # Install system dependencies needed for yt-dlp, ffmpeg, and curl-cffi
 RUN apt-get update && apt-get install -y \
     ffmpeg \
+    nodejs \
     build-essential \
     libnss3 \
     libnspr4 \
