@@ -14,36 +14,42 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def automate_downr_capture(youtube_url):
-    """
-    Simulates a native browser download to bypass IP-lock and 403 Forbidden errors.
-    """
     timestamp = int(time.time())
-    # We let Playwright choose the temp path first, then move it
     
     with sync_playwright() as p:
-        # We MUST use a real browser download behavior
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            accept_downloads=True, # Crucial: tells the browser to allow file downloads
+            accept_downloads=True,
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         page = context.new_page()
 
-        print(f"🚀 Step 1: Loading Downr...")
+        print(f"🚀 Step 1: Loading Downr for {youtube_url}")
         page.goto("https://downr.org", wait_until="networkidle")
         page.fill("input[placeholder='Paste URL here']", youtube_url)
         page.click("button:has-text('Download')")
 
         print("⏳ Step 2: Waiting for Download Button...")
-        # We wait for the actual <a> tag that contains the googlevideo link
         download_selector = "a[href*='googlevideo']"
-        page.wait_for_selector(download_selector, timeout=90000)
+        page.wait_for_selector(download_selector, timeout=60000)
 
-        # --- THE FIX: Trigger Native Download ---
-        print("💾 Step 3: Triggering Native Browser Save...")
+        # --- THE FIX: Force 'Download' Attribute ---
+        # We inject JS to ensure the browser doesn't try to play the video.
+        print("🔧 Injecting force-download attributes...")
+        page.evaluate(f"""
+            (sel) => {{
+                const el = document.querySelector(sel);
+                if (el) {{
+                    el.setAttribute('download', 'video.mp4');
+                    el.setAttribute('target', '_self');
+                }}
+            }}
+        """, download_selector)
+
+        print("💾 Step 3: Capturing Download...")
         try:
-            with page.expect_download(timeout=120000) as download_info:
-                # We click the link. If it opens a new tab, Playwright catches the stream.
+            with page.expect_download(timeout=90000) as download_info:
+                # Clicking the modified link now triggers the download manager
                 page.click(download_selector)
             
             download = download_info.value
@@ -51,15 +57,11 @@ def automate_downr_capture(youtube_url):
             download.save_as(save_path)
             
             browser.close()
-            
-            file_size = os.path.getsize(save_path)
-            print(f"✅ Success: Native Save complete ({file_size} bytes)")
             return save_path
 
         except Exception as e:
             if 'browser' in locals(): browser.close()
-            print(f"❌ Native Save Failed: {str(e)}")
-            raise e
+            raise Exception(f"Download failed or timed out: {str(e)}")
 
 @app.route('/api/process-link', methods=['POST'])
 def process_link():
@@ -76,20 +78,19 @@ def process_link():
         with open(local_file, "rb") as f:
             supabase.storage.from_("videos").upload(file_name, f, {"content-type": "video/mp4"})
 
-        # Record job as 'waiting' for your worker
+        # Final Database Entry
         supabase.table("jobs").insert({
             "video_url": f"videos/{file_name}",
             "tier_key": 1,
             "mode": "do",
-            "status": "waiting",
-            "priority": "low"
+            "status": "waiting"
         }).execute()
 
         if os.path.exists(local_file): os.remove(local_file)
         return jsonify({"status": "success", "file": file_name})
 
     except Exception as e:
-        print(f"❌ Workflow Error: {str(e)}")
+        print(f"❌ Error: {str(e)}")
         if local_file and os.path.exists(local_file): os.remove(local_file)
         return jsonify({"error": str(e)}), 500
 
