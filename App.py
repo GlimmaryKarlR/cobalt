@@ -35,28 +35,27 @@ def background_worker(youtube_url, job_id):
         ydl_opts = {
             'format': 'best',
             'outtmpl': local_file,
-            'cookiefile': COOKIE_FILE,
+            'cookiefile': 'cookies.txt', # Double check this filename!
             'nocheckcertificate': True,
-            'quiet': False, # Keep this False so we can see the logs if it fails
             
-            # --- THE FIX: CLIENT SPOOFING ---
-            'impersonate': 'chrome', # Tells YouTube you are a real browser
+            # --- THE "BYPASS" STRATEGY ---
+            'impersonate': 'chrome', # Requires curl_cffi in requirements.txt
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': '*/*',
                 'Accept-Language': 'en-US,en;q=0.5',
+                'Origin': 'https://www.youtube.com',
                 'Referer': 'https://www.youtube.com/',
             },
             
-            # --- THE FIX: DOWNLOADER STABILITY ---
-            'hls_use_native__hls': True,
+            # --- FORCE FFMPEG TO USE HEADERS ---
             'external_downloader': 'ffmpeg',
             'external_downloader_args': {
                 'ffmpeg_i': [
                     '-reconnect', '1', 
                     '-reconnect_streamed', '1', 
                     '-reconnect_delay_max', '5',
-                    '-headers', f'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+                    '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' + '\r\n'
                 ]
             },
             
@@ -64,6 +63,7 @@ def background_worker(youtube_url, job_id):
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
             }],
+            'postprocessor_args': ['-movflags', 'faststart'],
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
