@@ -11,3 +11,6 @@ yt-dlp
 yt-dlp-ejs
 curl_cffi
 
+
+playwright
+playwright-stealth
