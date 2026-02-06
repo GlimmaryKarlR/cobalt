@@ -14,14 +14,18 @@ SUPABASE_URL = "https://wherenftvmhfzhbegftb.supabase.co"
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def update_job_progress(job_id, progress, message, status="downloading"):
-    """Update the database so we can see where it's stuck."""
+def update_job_progress(job_id, progress, message, status="downloading", final_url=None):
+    """Updates the database. Now handles the URL update as well."""
     try:
-        supabase.table("jobs").update({
+        data = {
             "progress_percent": progress,
             "current_step": message,
             "status": status
-        }).eq("id", job_id).execute()
+        }
+        if final_url:
+            data["video_url"] = final_url
+            
+        supabase.table("jobs").update(data).eq("id", job_id).execute()
         print(f"📊 [Job {job_id[:8]}] {progress}% - {message}")
     except Exception as e:
         print(f"⚠️ Progress Update Failed: {e}")
@@ -31,10 +35,9 @@ def background_worker(youtube_url, job_id):
     timestamp = int(time.time())
     
     try:
-        update_job_progress(job_id, 10, "Launching Playwright...")
+        update_job_progress(job_id, 15, "Launching Automation Engine...")
         
         with sync_playwright() as p:
-            # Added more args to make Chromium more stable in a container/thread
             browser = p.chromium.launch(
                 headless=True, 
                 args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
@@ -42,18 +45,16 @@ def background_worker(youtube_url, job_id):
             context = browser.new_context(accept_downloads=True)
             page = context.new_page()
 
-            update_job_progress(job_id, 25, "Generating Downr Link...")
+            update_job_progress(job_id, 30, "Navigating to Downr...")
             page.goto("https://downr.org", wait_until="domcontentloaded", timeout=60000)
             page.fill("input[placeholder='Paste URL here']", youtube_url)
             page.click("button:has-text('Download')")
 
-            # Wait for the specific video link
             download_selector = "a[href*='googlevideo']"
             page.wait_for_selector(download_selector, timeout=120000)
             
-            update_job_progress(job_id, 50, "Starting Binary Stream...")
+            update_job_progress(job_id, 50, "Streaming from Google...")
             
-            # Use the 'Force Download' trick we discussed
             page.evaluate(f"(sel) => {{ const el = document.querySelector(sel); if(el) el.setAttribute('download', 'video.mp4'); }}", download_selector)
 
             with page.expect_download(timeout=300000) as download_info:
@@ -62,22 +63,24 @@ def background_worker(youtube_url, job_id):
             download = download_info.value
             local_file = f"/tmp/{timestamp}_video.mp4"
             download.save_as(local_file)
-            
             browser.close()
             
             file_size = os.path.getsize(local_file)
-            update_job_progress(job_id, 75, f"Uploading to Storage ({file_size // 1024} KB)...")
+            update_job_progress(job_id, 80, f"Uploading {file_size // 1024}KB to Supabase...")
 
             file_name = os.path.basename(local_file)
             with open(local_file, "rb") as f:
                 supabase.storage.from_("videos").upload(file_name, f, {"content-type": "video/mp4"})
 
-            # FINAL STEP: Change status to 'waiting' so your worker sees it
-            update_job_progress(job_id, 100, "Ready", status="waiting")
-            # Update the video_url column specifically
-            supabase.table("jobs").update({"video_url": f"videos/{file_name}"}).eq("id", job_id).execute()
-            
-            print(f"✅ [SUCCESS] Job {job_id} Fully Processed.")
+            # FINAL SUCCESS UPDATE: Switch status to 'waiting' and set real URL
+            update_job_progress(
+                job_id, 
+                100, 
+                "Download Complete", 
+                status="waiting", 
+                final_url=f"videos/{file_name}"
+            )
+            print(f"✅ [SUCCESS] Job {job_id} is ready for processing.")
 
     except Exception as e:
         error_msg = str(e)[:200]
@@ -96,26 +99,28 @@ def process_link():
         return jsonify({"error": "No URL"}), 400
 
     try:
-        # 1. Create the row FIRST. This is our tracking anchor.
+        # --- THE FIX: Insert with a placeholder to satisfy NOT NULL ---
         job_res = supabase.table("jobs").insert({
+            "video_url": "pending_download", # Satisfies database constraint
             "status": "downloading",
             "progress_percent": 5,
-            "current_step": "Job Received",
+            "current_step": "Job Initialized",
             "tier_key": 1,
-            "mode": "do"
+            "mode": "do",
+            "priority": "low",
+            "source": "website"
         }).execute()
         
         job_id = job_res.data[0]['id']
-        print(f"🆕 Job Created: {job_id}")
+        print(f"🆕 Job Created in DB: {job_id}")
 
-        # 2. Start Thread (NOT as a daemon this time)
         thread = threading.Thread(target=background_worker, args=(video_url, job_id))
         thread.start()
 
         return jsonify({
             "status": "success",
             "job_id": job_id,
-            "message": "Automation started in background."
+            "message": "Processing in background."
         }), 200
 
     except Exception as e:
