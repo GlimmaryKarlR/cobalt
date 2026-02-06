@@ -1,15 +1,14 @@
-# Web Server
+# Web Framework & API
 flask
 flask-cors
 
-# Cloud Storage & Database
-supabase
-requests
-
-# The Downloader & Bypassing Tools
+# The Core Downloader (Keep this updated for YouTube blocks)
 yt-dlp
-yt-dlp-ejs
-curl_cffi
 
-playwright==1.40.0
-playwright-stealth==1.0.6
+# AI Agent / Browser Automation
+playwright==1.49.0
+playwright-stealth
+
+# Networking & Utilities
+certifi
+requests
