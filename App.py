@@ -18,10 +18,7 @@ def automate_downr_capture(youtube_url):
     save_path = f"/tmp/{timestamp}_video.mp4"
     
     with sync_playwright() as p:
-        # We use a standard launch here
         browser = p.chromium.launch(headless=True)
-        
-        # Initial context to get the link from Downr
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
@@ -33,30 +30,30 @@ def automate_downr_capture(youtube_url):
         page.click("button:has-text('Download')")
 
         print("⏳ Step 2: Extracting Video Link...")
-        # Use a flexible selector for the download button
-        selectors = ["a:has-text('360p')", "a:has-text('mp4')", "a[href*='googlevideo']"]
         page.wait_for_selector("a[href*='googlevideo']", timeout=90000)
-        
         video_link = page.get_attribute("a[href*='googlevideo']", "href")
+
         if not video_link:
             browser.close()
             raise Exception("Could not find video link.")
 
-        # --- THE FIX: The Dedicated Download Tab ---
-        print(f"💾 Step 3: Downloading via Direct Stream...")
+        # --- THE FIX: Follow redirects and only capture 200 OK ---
+        print(f"💾 Step 3: Following Redirects to Final Stream...")
         
-        # Create a second, clean page to isolate the video request from downr's CORS
         download_page = context.new_page()
         
         try:
-            # We "expect" a response that contains the video data
-            with download_page.expect_response(lambda res: res.url.startswith("https://") and "videoplayback" in res.url, timeout=120000) as response_info:
-                # Navigating to the URL directly in a new tab bypasses Fetch/CORS errors
+            # We look for the final 200 OK response in the googlevideo domain
+            with download_page.expect_response(
+                lambda res: "videoplayback" in res.url and res.status == 200, 
+                timeout=120000
+            ) as response_info:
                 download_page.goto(video_link)
             
             response = response_info.value
-            print(f"🎯 Stream Intercepted. Status: {response.status}")
+            print(f"🎯 Final Stream Found! Status: {response.status} | URL: {response.url[:50]}...")
             
+            # This blocks until the data is fully "drained"
             buffer = response.body()
             
             if buffer and len(buffer) > 5000:
@@ -64,7 +61,7 @@ def automate_downr_capture(youtube_url):
                     f.write(buffer)
                 print(f"✅ Success: Saved {len(buffer)} bytes.")
             else:
-                raise Exception(f"Buffer too small or empty ({len(buffer) if buffer else 0} bytes).")
+                raise Exception("Final response body was empty.")
 
             browser.close()
             return save_path
