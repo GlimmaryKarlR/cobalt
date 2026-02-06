@@ -15,35 +15,46 @@ SUPABASE_URL = "https://wherenftvmhfzhbegftb.supabase.co"
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Use a consistent User-Agent to prevent YouTube from killing the stream
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+
 def background_worker(youtube_url, job_id):
-    """Handles the heavy lifting with live MB tracking."""
+    """Handles heavy lifting with Browser Spoofing and Integrity Checks."""
     local_file = f"/tmp/{job_id}.mp4"
     try:
         with sync_playwright() as p:
             print(f"🧵 [Job {job_id[:8]}] Launching Browser...")
             browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-            context = browser.new_context()
+            context = browser.new_context(user_agent=USER_AGENT)
             page = context.new_page()
 
-            # Step 1: Navigate to the bypass site
+            # Step 1: Navigate to extract link
             supabase.table("jobs").update({"current_step": "Extracting Stream Link", "progress_percent": 15}).eq("id", job_id).execute()
             
             page.goto("https://downr.org", wait_until="networkidle", timeout=60000)
             page.fill("input[placeholder='Paste URL here']", youtube_url)
             page.click("button:has-text('Download')")
 
-            # Step 2: Extract the raw Google Video URL
+            # Step 2: Grab the actual Googlevideo URL
             download_selector = "a[href*='googlevideo']"
             page.wait_for_selector(download_selector, timeout=60000)
             direct_link = page.get_attribute(download_selector, "href")
             browser.close()
 
         if not direct_link:
-            raise Exception("Could not extract direct stream link.")
+            raise Exception("Failed to extract direct stream link from bypass site.")
 
-        # Step 3: Streamed Download with MB Tracking
-        print(f"📡 [Job {job_id[:8]}] Starting Streamed Download...")
-        response = requests.get(direct_link, stream=True, timeout=30)
+        # Step 3: Streamed Download with Spoofing & Live MB Tracking
+        print(f"📡 [Job {job_id[:8]}] Starting Spoofed Download...")
+        
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "*/*",
+            "Connection": "keep-alive",
+            "Referer": "https://downr.org/"
+        }
+
+        response = requests.get(direct_link, headers=headers, stream=True, timeout=60)
         total_size = int(response.headers.get('content-length', 0))
         bytes_downloaded = 0
         last_update_time = 0
@@ -54,10 +65,9 @@ def background_worker(youtube_url, job_id):
                     f.write(chunk)
                     bytes_downloaded += len(chunk)
                     
-                    # Update Supabase every 2 seconds to avoid rate limiting
-                    if time.time() - last_update_time > 2:
+                    # Update Supabase every 3 seconds
+                    if time.time() - last_update_time > 3:
                         mb_val = bytes_downloaded / (1024 * 1024)
-                        # Calculate progress between 20% and 80%
                         calc_progress = 20 + int((bytes_downloaded / total_size) * 60) if total_size > 0 else 45
                         
                         supabase.table("jobs").update({
@@ -66,23 +76,27 @@ def background_worker(youtube_url, job_id):
                         }).eq("id", job_id).execute()
                         last_update_time = time.time()
 
-        # Step 4: Upload to Supabase Storage
-        if os.path.exists(local_file):
-            print(f"📤 [Job {job_id[:8]}] Uploading {os.path.getsize(local_file) // 1024}KB...")
-            supabase.table("jobs").update({"current_step": "Finalizing Upload", "progress_percent": 85}).eq("id", job_id).execute()
+        # Step 4: Integrity Check (Crucial for Phase 1 Fix)
+        file_size = os.path.getsize(local_file)
+        if file_size < 500000: # Files smaller than 0.5MB are likely corrupt/errors
+            raise Exception(f"Download truncated ({file_size / 1024:.1f} KB). moov atom likely missing.")
 
-            file_name = f"{int(time.time())}_{job_id[:8]}.mp4"
-            with open(local_file, "rb") as f:
-                supabase.storage.from_("videos").upload(file_name, f, {"x-upsert": "true"})
+        # Step 5: Upload to Supabase Storage
+        print(f"📤 [Job {job_id[:8]}] Uploading {file_size // 1024} KB...")
+        supabase.table("jobs").update({"current_step": "Uploading to Storage", "progress_percent": 85}).eq("id", job_id).execute()
 
-            # Step 5: Finalize row
-            supabase.table("jobs").update({
-                "video_url": f"videos/{file_name}",
-                "status": "waiting",
-                "current_step": "Ready",
-                "progress_percent": 100
-            }).eq("id", job_id).execute()
-            print(f"✅ [Job {job_id[:8]}] Success.")
+        file_name = f"{int(time.time())}_{job_id[:8]}.mp4"
+        with open(local_file, "rb") as f:
+            supabase.storage.from_("videos").upload(file_name, f, {"x-upsert": "true"})
+
+        # Step 6: Finalize (This triggers the Hugging Face Worker)
+        supabase.table("jobs").update({
+            "video_url": f"videos/{file_name}",
+            "status": "waiting",
+            "current_step": "Ready for Processing",
+            "progress_percent": 100
+        }).eq("id", job_id).execute()
+        print(f"✅ [Job {job_id[:8]}] Download complete and healthy.")
 
     except Exception as e:
         error_msg = str(e)[:250]
