@@ -1,23 +1,19 @@
-# 1. Use a slim Python image (much faster to deploy)
-FROM python:3.9-slim
+# 1. Use Python 3.10 (3.9 is deprecated and struggles with curl_cffi)
+FROM python:3.10-slim
 
-# 2. Install FFmpeg (Essential for the "Universal" convert-to-mp4 strategy)
+# 2. Install FFmpeg and build essentials for curl_cffi
 RUN apt-get update && apt-get install -y \
     ffmpeg \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # 3. Install Python dependencies
-# Note: Removed playwright as it's no longer needed for the cookie method
-RUN pip install --no-cache-dir \
-    flask \
-    flask-cors \
-    supabase \
-    requests \
-    yt-dlp
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 4. Copy your app files (including App.py and cookies.txt)
+# 4. Copy your app files
 COPY . .
 
 # 5. Environment Variables
