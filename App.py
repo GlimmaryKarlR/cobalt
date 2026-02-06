@@ -33,13 +33,15 @@ def background_worker(youtube_url, job_id):
 
         # FIXED INDENTATION HERE
         ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            # "best" is the magic word here—it grabs the best single file available
+            'format': 'best[ext=mp4]/best', 
             'outtmpl': local_file,
             'cookiefile': COOKIE_FILE,
             'socket_timeout': 30,
             'retries': 10,
             'quiet': True,
             'no_warnings': True,
+            # We keep the convertor just in case "best" returns a .webm
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
