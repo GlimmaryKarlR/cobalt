@@ -28,15 +28,14 @@ def background_worker(youtube_url, job_id):
         
         # Exact 8-space indentation for the ydl_opts dictionary
         ydl_opts = {
-            'format': 'best',
+            # Try to get a single file that already has video+audio
+            'format': 'bestvideo+bestaudio/best', 
             'outtmpl': local_file,
             'cookiefile': COOKIE_FILE,
             'nocheckcertificate': True,
             'quiet': False,
-            'no_warnings': False,
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            },
+            # This helps solve the "n challenge"
+            'allow_unplayable_formats': True,
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
