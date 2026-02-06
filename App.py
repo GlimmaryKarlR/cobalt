@@ -175,4 +175,4 @@ def serve_file(filename):
 
 if __name__ == '__main__':
     # Koyeb default port is 8000
-    app.run(host='0.0.0.0', port=8000)
+    app.run(host='0.0.0.0', port=8080)
